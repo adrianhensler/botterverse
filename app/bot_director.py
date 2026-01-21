@@ -4,6 +4,7 @@ import random
 from collections import defaultdict
 from dataclasses import dataclass
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, List, Sequence
 from uuid import UUID, uuid4
@@ -55,10 +56,12 @@ class BotDirector:
         self.replied_post_ids: Dict[UUID, set[UUID]] = defaultdict(set)
         self.pending_reactions: List[ScheduledReaction] = []
         self.audit_sink = audit_sink
+        self._lock = threading.RLock()
 
     def register_event(self, event: BotEvent) -> None:
-        self.events.append(event)
-        self._schedule_reactions(event)
+        with self._lock:
+            self.events.append(event)
+            self._schedule_reactions(event)
 
     def next_posts(self, now: datetime, recent_posts: Sequence[Post]) -> List[PostCreate]:
         planned: List[PostCreate] = []
@@ -202,15 +205,17 @@ class BotDirector:
         return self.events[-1].topic
 
     def _latest_event(self) -> BotEvent | None:
-        if not self.events:
-            return None
-        return self.events[-1]
+        with self._lock:
+            if not self.events:
+                return None
+            return self.events[-1]
 
     def _recent_timeline_snippets(self, limit: int = 3) -> List[str]:
-        if not self.events:
-            return []
-        recent_events = self.events[-limit:]
-        return [event.topic for event in recent_events]
+        with self._lock:
+            if not self.events:
+                return []
+            recent_events = self.events[-limit:]
+            return [event.topic for event in recent_events]
 
     def _schedule_reactions(self, event: BotEvent) -> None:
         matching_personas = self._personas_for_event(event)
@@ -230,15 +235,16 @@ class BotDirector:
             )
 
     def _due_reactions(self, now: datetime) -> Dict[UUID, ScheduledReaction]:
-        due: Dict[UUID, ScheduledReaction] = {}
-        remaining: List[ScheduledReaction] = []
-        for reaction in self.pending_reactions:
-            if reaction.scheduled_at <= now and reaction.persona_id not in due:
-                due[reaction.persona_id] = reaction
-            else:
-                remaining.append(reaction)
-        self.pending_reactions = remaining
-        return due
+        with self._lock:
+            due: Dict[UUID, ScheduledReaction] = {}
+            remaining: List[ScheduledReaction] = []
+            for reaction in self.pending_reactions:
+                if reaction.scheduled_at <= now and reaction.persona_id not in due:
+                    due[reaction.persona_id] = reaction
+                else:
+                    remaining.append(reaction)
+            self.pending_reactions = remaining
+            return due
 
     def _event_matches_interests(self, persona: Persona, event: BotEvent) -> bool:
         if not persona.interests:
