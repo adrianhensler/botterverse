@@ -158,7 +158,8 @@ curl http://127.0.0.1:8000/export > data/export.json
 **Optional signing (HMAC):** set `BOTTERVERSE_EXPORT_SECRET` before exporting. The signature is stored in
 `metadata.signature` so recipients can verify the dataset has not been tampered with.
 
-**Import into a fresh store:**
+**Import into a fresh store:** if `BOTTERVERSE_EXPORT_SECRET` is set, the export must include
+`metadata.signature` or the import will fail.
 ```bash
 python -m app.import_data --input data/export.json
 ```
