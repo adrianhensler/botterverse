@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import random
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Sequence
 from uuid import UUID, uuid4
 
 from .llm_client import generate_post
-from .models import Author, PostCreate
+from .models import Author, Post, PostCreate
 
 director_paused = False
 
@@ -30,15 +31,18 @@ class BotEvent:
 
 
 class BotDirector:
+    REPLY_PROBABILITY = 0.15
+
     def __init__(self, personas: List[Persona]) -> None:
         self.personas = personas
         self.events: List[BotEvent] = []
         self.last_posted_at: Dict[UUID, datetime] = {}
+        self.replied_post_ids: Dict[UUID, set[UUID]] = defaultdict(set)
 
     def register_event(self, event: BotEvent) -> None:
         self.events.append(event)
 
-    def next_posts(self, now: datetime) -> List[PostCreate]:
+    def next_posts(self, now: datetime, recent_posts: Sequence[Post]) -> List[PostCreate]:
         planned: List[PostCreate] = []
         latest_topic = self._latest_topic()
         recent_snippets = self._recent_timeline_snippets()
@@ -50,20 +54,77 @@ class BotDirector:
                 elapsed = now - last_posted_at
                 if elapsed < self._jittered_cadence(cadence_window):
                     continue
-            context = {
-                "latest_event_topic": latest_topic,
-                "recent_timeline_snippets": recent_snippets,
-            }
-            planned.append(
-                PostCreate(
-                    author_id=persona.id,
-                    content=generate_post(persona, context),
-                    reply_to=None,
-                    quote_of=None,
-                )
-            )
+            reply_payload = self._maybe_plan_reply(persona, latest_topic, recent_snippets, recent_posts)
+            if reply_payload is not None:
+                planned.append(reply_payload)
+                self.last_posted_at[persona.id] = now
+                continue
+            planned.append(self._plan_new_post(persona, latest_topic, recent_snippets))
             self.last_posted_at[persona.id] = now
         return planned
+
+    def _plan_new_post(
+        self,
+        persona: Persona,
+        latest_topic: str,
+        recent_snippets: Sequence[str],
+    ) -> PostCreate:
+        context = {
+            "latest_event_topic": latest_topic,
+            "recent_timeline_snippets": recent_snippets,
+        }
+        return PostCreate(
+            author_id=persona.id,
+            content=generate_post(persona, context),
+            reply_to=None,
+            quote_of=None,
+        )
+
+    def _maybe_plan_reply(
+        self,
+        persona: Persona,
+        latest_topic: str,
+        recent_snippets: Sequence[str],
+        recent_posts: Sequence[Post],
+    ) -> PostCreate | None:
+        if random.random() > self.REPLY_PROBABILITY:
+            return None
+        candidates = self._eligible_reply_targets(persona, recent_posts)
+        if not candidates:
+            return None
+        target = random.choice(candidates)
+        context = {
+            "latest_event_topic": target.content or latest_topic,
+            "recent_timeline_snippets": [target.content, *recent_snippets],
+            "reply_to_post": target.content,
+        }
+        self.replied_post_ids[persona.id].add(target.id)
+        return PostCreate(
+            author_id=persona.id,
+            content=generate_post(persona, context),
+            reply_to=target.id,
+            quote_of=None,
+        )
+
+    def _eligible_reply_targets(
+        self,
+        persona: Persona,
+        recent_posts: Sequence[Post],
+    ) -> List[Post]:
+        seen_posts = self.replied_post_ids[persona.id]
+        return [
+            post
+            for post in recent_posts
+            if post.author_id != persona.id
+            if post.id not in seen_posts
+            if self._post_matches_interests(persona, post)
+        ]
+
+    def _post_matches_interests(self, persona: Persona, post: Post) -> bool:
+        if not persona.interests:
+            return False
+        content = post.content.casefold()
+        return any(interest.casefold() in content for interest in persona.interests)
 
     def _jittered_cadence(self, cadence_window: timedelta) -> timedelta:
         jitter_factor = random.uniform(-0.2, 0.2)

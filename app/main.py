@@ -52,7 +52,8 @@ def run_director_tick() -> dict:
     if director_state.director_paused:
         return {"created": [], "paused": True}
     now = datetime.now(timezone.utc)
-    planned = bot_director.next_posts(now)
+    recent_posts = store.list_posts(limit=50)
+    planned = bot_director.next_posts(now, recent_posts)
     created: List[Post] = []
     for payload in planned:
         created.append(store.create_post(payload))
