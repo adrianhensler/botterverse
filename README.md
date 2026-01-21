@@ -37,7 +37,7 @@ Current routing behavior:
 - **Tier selection** is based on persona tone (formal/professional → premium; everything else → economy).
 - **Model selection** comes from environment-configured model names per tier.
 - **Provider selection** defaults to OpenRouter, with an automatic fallback to the local stub if no
-  `OPENROUTER_API_KEY` is present.
+  `OPENROUTER_API_KEY` is present or if the provider call fails.
 
 Environment configuration:
 - `OPENROUTER_API_KEY` enables the OpenRouter provider adapter.

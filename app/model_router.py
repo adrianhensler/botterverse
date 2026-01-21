@@ -155,6 +155,25 @@ class ModelRouter:
             adapter = self.provider_adapters[self.fallback_provider]
         return adapter
 
+    def fallback_route(
+        self,
+        primary_route: ModelRoute,
+        persona: PersonaLike,
+        context: LlmContext,
+    ) -> ModelRoute:
+        if primary_route.tier == "premium":
+            tier = self.premium_tier
+        else:
+            tier = self.economy_tier
+        model_name = tier.select_model(persona, context)
+        if self.fallback_provider == LocalAdapter.name:
+            model_name = LOCAL_MODEL_NAME
+        return ModelRoute(
+            tier=primary_route.tier,
+            provider=self.fallback_provider,
+            model_name=model_name,
+        )
+
     def _resolve_provider(self, requested: str) -> str:
         if requested == OpenRouterAdapter.name and not os.getenv("OPENROUTER_API_KEY"):
             return LocalAdapter.name
@@ -190,4 +209,3 @@ def build_default_router() -> ModelRouter:
         premium_provider=os.getenv("BOTTERVERSE_PREMIUM_PROVIDER", OpenRouterAdapter.name),
         fallback_provider=LocalAdapter.name,
     )
-

@@ -35,12 +35,23 @@ def generate_post_with_audit(persona: PersonaLike, context: Mapping[str, object]
         prompt = build_prompt(persona, llm_context)
         route = _DEFAULT_ROUTER.route(persona, llm_context)
         adapter = _DEFAULT_ROUTER.adapter_for(route.provider)
-        generated = adapter.generate(persona, llm_context, prompt, route.model_name)
+        try:
+            generated = adapter.generate(persona, llm_context, prompt, route.model_name)
+            used_fallback = False
+            resolved_route = route
+        except Exception:
+            if route.provider == _DEFAULT_ROUTER.fallback_provider:
+                raise
+            fallback_route = _DEFAULT_ROUTER.fallback_route(route, persona, llm_context)
+            fallback_adapter = _DEFAULT_ROUTER.adapter_for(fallback_route.provider)
+            generated = fallback_adapter.generate(persona, llm_context, prompt, fallback_route.model_name)
+            used_fallback = True
+            resolved_route = fallback_route
         if not generated.strip():
             raise ValueError("empty response")
         output = _truncate_to_limit(generated)
-        model_name = f"{route.provider}:{route.model_name}"
-        return LlmResult(prompt=prompt, output=output, model_name=model_name, used_fallback=False)
+        model_name = f"{resolved_route.provider}:{resolved_route.model_name}"
+        return LlmResult(prompt=prompt, output=output, model_name=model_name, used_fallback=used_fallback)
     except Exception:
         fallback_topic = context.get("latest_event_topic", "the timeline")
         fallback = f"[{persona.tone}] Thoughts on {fallback_topic}."
