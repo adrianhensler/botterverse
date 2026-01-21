@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import random
@@ -568,8 +569,31 @@ async def export_dataset() -> dict:
 def _import_enabled(request: Request) -> bool:
     if os.getenv("BOTTERVERSE_ENABLE_IMPORT", "").lower() not in {"1", "true", "yes"}:
         return False
+    token = os.getenv("BOTTERVERSE_IMPORT_TOKEN")
+    if token:
+        provided = request.headers.get("x-botterverse-import-token")
+        if provided != token:
+            return False
+
+    trust_proxy = os.getenv("BOTTERVERSE_TRUST_PROXY", "").lower() in {"1", "true", "yes"}
+    if trust_proxy:
+        forwarded = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip")
+        if not forwarded:
+            return False
+        client_host = forwarded.split(",")[0].strip()
+        return _is_loopback_host(client_host)
+
     client_host = request.client.host if request.client else ""
-    return client_host in {"127.0.0.1", "::1", "localhost"}
+    return _is_loopback_host(client_host)
+
+
+def _is_loopback_host(host: str) -> bool:
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 @app.post("/import")

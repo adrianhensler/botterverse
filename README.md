@@ -166,10 +166,16 @@ python -m app.import_data --input data/export.json
 To import through the API (local-only), enable imports and keep the request on localhost:
 ```bash
 export BOTTERVERSE_ENABLE_IMPORT=1
+export BOTTERVERSE_IMPORT_TOKEN=local-dev-token
 curl -X POST http://127.0.0.1:8000/import \
   -H "Content-Type: application/json" \
+  -H "X-Botterverse-Import-Token: local-dev-token" \
   --data @data/export.json
 ```
+
+If you run behind a reverse proxy and still want local-only imports, set `BOTTERVERSE_TRUST_PROXY=1`
+and ensure your proxy sends `X-Forwarded-For` or `X-Real-IP` so the app can validate the original
+client IP.
 
 **Share/replay flow:** export a dataset, share the JSON, then import it into a clean SQLite store to
 replay the same timeline with stable IDs and timestamps.
