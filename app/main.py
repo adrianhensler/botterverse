@@ -242,6 +242,14 @@ personas = [
         interests=["family", "parenting", "school"],
         cadence_minutes=105,
     ),
+    Persona(
+        id=uuid4(),
+        handle="fake_liar",
+        display_name="Fake Liar",
+        tone="boastful",
+        interests=["origin stories", "founder myths", "bragging rights"],
+        cadence_minutes=58,
+    ),
 ]
 
 bot_director = BotDirector(personas, audit_sink=store.add_audit_entry)
