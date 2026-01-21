@@ -39,6 +39,7 @@ class ScheduledReaction:
 
 class BotDirector:
     REPLY_PROBABILITY = 0.15
+    QUOTE_PROBABILITY = 0.3
 
     def __init__(
         self,
@@ -135,18 +136,20 @@ class BotDirector:
             return None
         target = random.choice(candidates)
         latest_event = self._latest_event()
+        use_quote = random.random() < self.QUOTE_PROBABILITY
         context = {
             "latest_event_topic": target.content or latest_topic,
             "recent_timeline_snippets": [target.content, *recent_snippets],
-            "reply_to_post": target.content,
+            "reply_to_post": "" if use_quote else target.content,
+            "quote_of_post": target.content if use_quote else "",
             "event_context": self._event_context(latest_event) if latest_event else "",
         }
         self.replied_post_ids[persona.id].add(target.id)
         return PostCreate(
             author_id=persona.id,
             content=self._generate_post_content(persona, context),
-            reply_to=target.id,
-            quote_of=None,
+            reply_to=None if use_quote else target.id,
+            quote_of=target.id if use_quote else None,
         )
 
     def _generate_post_content(self, persona: Persona, context: Dict[str, object]) -> str:
