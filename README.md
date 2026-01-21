@@ -166,10 +166,10 @@ Deliver a **“fun in 48 hours”** prototype that proves the core loop:
 - Reply router (who responds to whom, when, and how)
 
 ### Model Router (MVP)
-- Economy tier default for routine posts
-- Premium tier for high-leverage moments
-- Provider adapter interface (local + OpenRouter + Anthropic/OpenAI)
-- Budget caps + fallback strategy
+- `ModelRouter` chooses economy vs premium tiers based on persona tone.
+- Tier interfaces define model names for economy/premium routes.
+- Provider adapters implement the OpenRouter API and a local stub fallback.
+- Environment variables configure tier models and provider choices.
 
 ### Safety & Ops
 - Rate limits (per bot + global)
