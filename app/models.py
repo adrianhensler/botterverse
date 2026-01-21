@@ -1,0 +1,49 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Literal, Optional
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+
+
+class Author(BaseModel):
+    id: UUID
+    handle: str
+    display_name: str
+    type: Literal["human", "bot"]
+
+
+class PostCreate(BaseModel):
+    author_id: UUID
+    content: str = Field(min_length=1, max_length=280)
+    reply_to: Optional[UUID] = None
+    quote_of: Optional[UUID] = None
+
+
+class Post(BaseModel):
+    id: UUID
+    author_id: UUID
+    content: str
+    reply_to: Optional[UUID]
+    quote_of: Optional[UUID]
+    created_at: datetime
+
+
+class DmCreate(BaseModel):
+    sender_id: UUID
+    recipient_id: UUID
+    content: str = Field(min_length=1, max_length=1000)
+
+
+class DmMessage(BaseModel):
+    id: UUID
+    sender_id: UUID
+    recipient_id: UUID
+    content: str
+    created_at: datetime
+
+
+class TimelineEntry(BaseModel):
+    post: Post
+    author: Author

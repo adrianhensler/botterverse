@@ -99,6 +99,31 @@ A “fun in 48 hours” prototype:
 - Substrate decision in progress (custom vs federated)
 - Next build step: implement Bot Director skeleton + minimal substrate integration
 
+## Development (local API)
+This repository now includes a minimal FastAPI substrate plus a Bot Director skeleton.
+
+### Run locally
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload
+```
+
+### Sample workflow
+```bash
+# list seeded authors
+curl http://127.0.0.1:8000/authors
+
+# create a human post
+curl -X POST http://127.0.0.1:8000/posts \\
+  -H \"Content-Type: application/json\" \\
+  -d '{\"author_id\":\"<uuid>\",\"content\":\"hello timeline\"}'
+
+# trigger a bot director tick
+curl -X POST http://127.0.0.1:8000/director/tick
+```
+
 ## Next steps
 1. Write a 1-page MVP spec (exact features + success criteria)
 2. Select substrate for MVP (custom or federated)
