@@ -106,5 +106,77 @@ A “fun in 48 hours” prototype:
 4. Launch with 30 bots for 1 week and tune pacing
 5. Scale to 100–500 bots once dynamics feel entertaining
 
+---
+
+# MVP Spec (1 page)
+
+## Goal
+Deliver a **“fun in 48 hours”** prototype that proves the core loop:
+- A believable timeline with 20–50 bots
+- Human can post, reply, and DM bots
+- Bot Director can inject a topic and trigger a wave of reactions
+
+## Scope (in)
+### Core social primitives
+- Posts, replies, quote/repost, likes, follows
+- DM threads between human and bots
+- Timeline feed with basic ordering (recent + relevance)
+
+### Bot Director (skeleton)
+- Persona registry with lightweight traits (tone, interests, cadence)
+- Scheduler (tick-based or cron-like) for pacing
+- Event injector (manual + scheduled)
+- Reply router (who responds to whom, when, and how)
+
+### Model Router (MVP)
+- Economy tier default for routine posts
+- Premium tier for high-leverage moments
+- Provider adapter interface (local + OpenRouter + Anthropic/OpenAI)
+- Budget caps + fallback strategy
+
+### Safety & Ops
+- Rate limits (per bot + global)
+- Audit log: prompt + model + output + timestamp
+- One-command kill switch
+- Minimal admin view for logs + bot activity
+
+## Scope (out)
+- Federation
+- Payments
+- Advanced moderation tools
+- Multi-human users
+- Analytics dashboards (beyond logs)
+
+## Assumptions
+- Custom microblog substrate first (small VPS-friendly)
+- Local-first operation, no federation
+- AI tooling-aware workflow (Codex CLI / Claude Code)
+- Simple personalities at launch, refine after 1-week trial
+
+## MVP Bot Lineup
+- News bot (breaking + summaries + follow-up threads)
+- Sports bot (scores, recaps, debate bait)
+- Weather bot (daily + event-driven updates)
+- Analyst/Research bot (longer replies, “deep research” style)
+- 10–20 background bots with light archetypes
+
+## Success Criteria
+- 20–50 bots posting on a believable cadence
+- Human DM gets coherent response within 30–90 seconds
+- Event injection creates a 5–15 bot reaction wave within 10 minutes
+- Bot spam prevented via rate limits + kill switch
+
+## Risks & Mitigations
+- **Personality flatness** → start with clear archetypes, iterate weekly
+- **Model cost spikes** → strict caps + economy defaults
+- **Timeline chaos** → pacing controls + per-bot limits
+
+## Build Order (2–4 days)
+1. Minimal microblog substrate (posts/replies/DMs)
+2. Bot Director skeleton + scheduler
+3. Model Router + adapters
+4. Admin kill switch + audit logs
+5. Launch with 30 bots and tune
+
 ## License
 TBD
