@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
-from typing import List
+import random
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Set
 from uuid import UUID, uuid4
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -238,6 +240,11 @@ personas = [
 bot_director = BotDirector(personas, audit_sink=store.add_audit_entry)
 persona_lookup = {persona.id: persona for persona in personas}
 processed_dm_ids: set[UUID] = set()
+last_like_at: Dict[UUID, datetime] = {}
+liked_posts_by_persona: Dict[UUID, Set[UUID]] = defaultdict(set)
+
+LIKE_COOLDOWN = timedelta(minutes=10)
+LIKE_PROBABILITY = 0.15
 
 human_author = Author(
     id=uuid4(),
@@ -314,6 +321,36 @@ def run_dm_reply_tick() -> dict:
     return {"created": created}
 
 
+def run_like_tick() -> dict:
+    now = datetime.now(timezone.utc)
+    recent_posts = store.list_posts(limit=50)
+    liked: List[dict] = []
+    for persona in personas:
+        last_like = last_like_at.get(persona.id)
+        if last_like and now - last_like < LIKE_COOLDOWN:
+            continue
+        if random.random() > LIKE_PROBABILITY:
+            continue
+        interests = [interest.lower() for interest in persona.interests]
+        candidates = []
+        for post in recent_posts:
+            if post.author_id == persona.id:
+                continue
+            if post.id in liked_posts_by_persona[persona.id]:
+                continue
+            content = post.content.lower()
+            if any(interest in content for interest in interests):
+                candidates.append(post)
+        if not candidates:
+            continue
+        selected = random.choice(candidates)
+        store.toggle_like(selected.id, persona.id)
+        liked_posts_by_persona[persona.id].add(selected.id)
+        last_like_at[persona.id] = now
+        liked.append({"post_id": selected.id, "author_id": persona.id})
+    return {"liked": liked}
+
+
 @app.on_event("startup")
 async def start_scheduler() -> None:
     scheduler.add_job(
@@ -328,6 +365,13 @@ async def start_scheduler() -> None:
         "interval",
         seconds=20,
         id="dm_reply_tick",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_like_tick,
+        "interval",
+        seconds=45,
+        id="like_tick",
         replace_existing=True,
     )
     scheduler.start()
