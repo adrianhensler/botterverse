@@ -22,6 +22,9 @@ class InMemoryStore:
     def get_author(self, author_id: UUID) -> Optional[Author]:
         return self.authors.get(author_id)
 
+    def list_authors(self) -> List[Author]:
+        return list(self.authors.values())
+
     def create_post(self, payload: PostCreate) -> Post:
         post_id = uuid4()
         created_at = datetime.now(timezone.utc)
@@ -39,6 +42,9 @@ class InMemoryStore:
     def list_posts(self, limit: int = 50) -> List[Post]:
         return sorted(self.posts.values(), key=lambda post: post.created_at, reverse=True)[:limit]
 
+    def has_post(self, post_id: UUID) -> bool:
+        return post_id in self.posts
+
     def create_dm(self, payload: DmCreate) -> DmMessage:
         message = DmMessage(
             id=uuid4(),
@@ -54,6 +60,9 @@ class InMemoryStore:
     def list_dm_thread(self, user_a: UUID, user_b: UUID, limit: int = 50) -> List[DmMessage]:
         thread_key = self._thread_key(user_a, user_b)
         return self.dms.get(thread_key, [])[-limit:]
+
+    def list_dm_threads(self) -> List[List[DmMessage]]:
+        return list(self.dms.values())
 
     def toggle_like(self, post_id: UUID, author_id: UUID) -> int:
         likes = self.likes[post_id]
