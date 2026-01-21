@@ -55,3 +55,11 @@ class AuditEntry(BaseModel):
     output: str
     timestamp: datetime
     persona_id: UUID
+    post_id: Optional[UUID] = None
+    dm_id: Optional[UUID] = None
+
+
+class AuditEntryWithPost(BaseModel):
+    entry: AuditEntry
+    post: Optional[Post] = None
+    author: Optional[Author] = None

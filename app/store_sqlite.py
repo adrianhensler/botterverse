@@ -55,11 +55,27 @@ class SQLiteStore:
                 model_name TEXT NOT NULL,
                 output TEXT NOT NULL,
                 timestamp TEXT NOT NULL,
-                persona_id TEXT NOT NULL
+                persona_id TEXT NOT NULL,
+                post_id TEXT,
+                dm_id TEXT
             );
             """
         )
         self.connection.commit()
+        self._ensure_audit_columns()
+
+    def _ensure_audit_columns(self) -> None:
+        cursor = self.connection.execute("PRAGMA table_info(audit_entries)")
+        existing = {row["name"] for row in cursor.fetchall()}
+        migrations = []
+        if "post_id" not in existing:
+            migrations.append("ALTER TABLE audit_entries ADD COLUMN post_id TEXT")
+        if "dm_id" not in existing:
+            migrations.append("ALTER TABLE audit_entries ADD COLUMN dm_id TEXT")
+        for statement in migrations:
+            self.connection.execute(statement)
+        if migrations:
+            self.connection.commit()
 
     def add_author(self, author: Author) -> None:
         self.connection.execute(
@@ -99,6 +115,27 @@ class SQLiteStore:
             )
             for row in cursor.fetchall()
         ]
+
+    def get_post(self, post_id: UUID) -> Optional[Post]:
+        cursor = self.connection.execute(
+            """
+            SELECT id, author_id, content, reply_to, quote_of, created_at
+            FROM posts
+            WHERE id = ?
+            """,
+            (str(post_id),),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return Post(
+            id=UUID(row["id"]),
+            author_id=UUID(row["author_id"]),
+            content=row["content"],
+            reply_to=UUID(row["reply_to"]) if row["reply_to"] else None,
+            quote_of=UUID(row["quote_of"]) if row["quote_of"] else None,
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
 
     def create_post(self, payload: PostCreate) -> Post:
         post_id = uuid4()
@@ -355,8 +392,8 @@ class SQLiteStore:
     def add_audit_entry(self, entry: AuditEntry) -> None:
         self.connection.execute(
             """
-            INSERT INTO audit_entries (prompt, model_name, output, timestamp, persona_id)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO audit_entries (prompt, model_name, output, timestamp, persona_id, post_id, dm_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 entry.prompt,
@@ -364,6 +401,8 @@ class SQLiteStore:
                 entry.output,
                 entry.timestamp.isoformat(),
                 str(entry.persona_id),
+                str(entry.post_id) if entry.post_id else None,
+                str(entry.dm_id) if entry.dm_id else None,
             ),
         )
         self.connection.commit()
@@ -371,7 +410,7 @@ class SQLiteStore:
     def list_audit_entries(self, limit: int = 200) -> List[AuditEntry]:
         cursor = self.connection.execute(
             """
-            SELECT prompt, model_name, output, timestamp, persona_id
+            SELECT prompt, model_name, output, timestamp, persona_id, post_id, dm_id
             FROM audit_entries
             ORDER BY timestamp DESC
             LIMIT ?
@@ -386,10 +425,192 @@ class SQLiteStore:
                 output=row["output"],
                 timestamp=datetime.fromisoformat(row["timestamp"]),
                 persona_id=UUID(row["persona_id"]),
+                post_id=UUID(row["post_id"]) if row["post_id"] else None,
+                dm_id=UUID(row["dm_id"]) if row["dm_id"] else None,
             )
             for row in rows
         ]
         return list(reversed(entries))
+
+    def export_dataset(self) -> dict:
+        authors_cursor = self.connection.execute(
+            "SELECT id, handle, display_name, type FROM authors ORDER BY handle"
+        )
+        authors = [
+            {
+                "id": row["id"],
+                "handle": row["handle"],
+                "display_name": row["display_name"],
+                "type": row["type"],
+            }
+            for row in authors_cursor.fetchall()
+        ]
+        posts_cursor = self.connection.execute(
+            """
+            SELECT id, author_id, content, reply_to, quote_of, created_at
+            FROM posts
+            ORDER BY created_at ASC, id ASC
+            """
+        )
+        posts = [
+            {
+                "id": row["id"],
+                "author_id": row["author_id"],
+                "content": row["content"],
+                "reply_to": row["reply_to"],
+                "quote_of": row["quote_of"],
+                "created_at": row["created_at"],
+            }
+            for row in posts_cursor.fetchall()
+        ]
+        dms_cursor = self.connection.execute(
+            """
+            SELECT id, sender_id, recipient_id, content, created_at
+            FROM dms
+            ORDER BY created_at ASC, id ASC
+            """
+        )
+        dms = [
+            {
+                "id": row["id"],
+                "sender_id": row["sender_id"],
+                "recipient_id": row["recipient_id"],
+                "content": row["content"],
+                "created_at": row["created_at"],
+            }
+            for row in dms_cursor.fetchall()
+        ]
+        likes_cursor = self.connection.execute(
+            """
+            SELECT post_id, author_id
+            FROM likes
+            ORDER BY post_id ASC, author_id ASC
+            """
+        )
+        likes = [
+            {"post_id": row["post_id"], "author_id": row["author_id"]}
+            for row in likes_cursor.fetchall()
+        ]
+        audit_cursor = self.connection.execute(
+            """
+            SELECT prompt, model_name, output, timestamp, persona_id, post_id, dm_id
+            FROM audit_entries
+            ORDER BY timestamp ASC, id ASC
+            """
+        )
+        audit_entries = [
+            {
+                "prompt": row["prompt"],
+                "model_name": row["model_name"],
+                "output": row["output"],
+                "timestamp": row["timestamp"],
+                "persona_id": row["persona_id"],
+                "post_id": row["post_id"],
+                "dm_id": row["dm_id"],
+            }
+            for row in audit_cursor.fetchall()
+        ]
+        return {
+            "metadata": {
+                "version": 1,
+                "exported_at": datetime.now(timezone.utc).isoformat(),
+                "counts": {
+                    "authors": len(authors),
+                    "posts": len(posts),
+                    "dms": len(dms),
+                    "likes": len(likes),
+                    "audit_entries": len(audit_entries),
+                },
+            },
+            "authors": authors,
+            "posts": posts,
+            "dms": dms,
+            "likes": likes,
+            "audit_entries": audit_entries,
+        }
+
+    def import_dataset(self, payload: dict) -> None:
+        cursor = self.connection.cursor()
+        cursor.executescript(
+            """
+            DELETE FROM likes;
+            DELETE FROM dms;
+            DELETE FROM posts;
+            DELETE FROM authors;
+            DELETE FROM audit_entries;
+            """
+        )
+        for author in payload.get("authors", []):
+            cursor.execute(
+                """
+                INSERT INTO authors (id, handle, display_name, type)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    author["id"],
+                    author["handle"],
+                    author["display_name"],
+                    author["type"],
+                ),
+            )
+        for post in payload.get("posts", []):
+            cursor.execute(
+                """
+                INSERT INTO posts (id, author_id, content, reply_to, quote_of, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    post["id"],
+                    post["author_id"],
+                    post["content"],
+                    post.get("reply_to"),
+                    post.get("quote_of"),
+                    post["created_at"],
+                ),
+            )
+        for message in payload.get("dms", []):
+            thread_user_a, thread_user_b = self._thread_key(
+                UUID(message["sender_id"]), UUID(message["recipient_id"])
+            )
+            cursor.execute(
+                """
+                INSERT INTO dms (
+                    id, sender_id, recipient_id, thread_user_a, thread_user_b, content, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    message["id"],
+                    message["sender_id"],
+                    message["recipient_id"],
+                    str(thread_user_a),
+                    str(thread_user_b),
+                    message["content"],
+                    message["created_at"],
+                ),
+            )
+        for like in payload.get("likes", []):
+            cursor.execute(
+                "INSERT INTO likes (post_id, author_id) VALUES (?, ?)",
+                (like["post_id"], like["author_id"]),
+            )
+        for entry in payload.get("audit_entries", []):
+            cursor.execute(
+                """
+                INSERT INTO audit_entries (prompt, model_name, output, timestamp, persona_id, post_id, dm_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    entry["prompt"],
+                    entry["model_name"],
+                    entry["output"],
+                    entry["timestamp"],
+                    entry["persona_id"],
+                    entry.get("post_id"),
+                    entry.get("dm_id"),
+                ),
+            )
+        self.connection.commit()
 
     @staticmethod
     def _thread_key(user_a: UUID, user_b: UUID) -> Tuple[UUID, UUID]:
