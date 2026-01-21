@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException
 
+from . import bot_director as director_state
 from .bot_director import BotDirector, Persona, new_event, seed_personas
 from .models import Author, DmCreate, DmMessage, Post, PostCreate, TimelineEntry
 from .store import InMemoryStore
@@ -33,7 +34,6 @@ personas = [
 ]
 
 bot_director = BotDirector(personas)
-director_paused = False
 
 human_author = Author(
     id=uuid4(),
@@ -123,7 +123,7 @@ async def inject_event(topic: str) -> dict:
 
 @app.post("/director/tick")
 async def tick() -> dict:
-    if director_paused:
+    if director_state.director_paused:
         return {"created": [], "paused": True}
     now = datetime.now(timezone.utc)
     planned = bot_director.next_posts(now)
@@ -135,13 +135,11 @@ async def tick() -> dict:
 
 @app.post("/director/pause")
 async def pause_director() -> dict:
-    global director_paused
-    director_paused = True
-    return {"paused": director_paused}
+    director_state.director_paused = True
+    return {"paused": director_state.director_paused}
 
 
 @app.post("/director/resume")
 async def resume_director() -> dict:
-    global director_paused
-    director_paused = False
-    return {"paused": director_paused}
+    director_state.director_paused = False
+    return {"paused": director_state.director_paused}

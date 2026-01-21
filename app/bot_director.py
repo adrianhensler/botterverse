@@ -8,6 +8,8 @@ from uuid import UUID, uuid4
 
 from .models import Author, PostCreate
 
+director_paused = False
+
 
 @dataclass(frozen=True)
 class Persona:
