@@ -42,6 +42,42 @@ class InMemoryStore:
     def list_posts(self, limit: int = 50) -> List[Post]:
         return sorted(self.posts.values(), key=lambda post: post.created_at, reverse=True)[:limit]
 
+    def list_posts_ranked(
+        self,
+        limit: int = 50,
+        *,
+        like_weight: float = 0.2,
+        reply_weight: float = 0.6,
+        quote_weight: float = 0.4,
+        recency_weight: float = 1.0,
+        recency_window_hours: float = 24.0,
+    ) -> List[Post]:
+        posts = list(self.posts.values())
+        reply_counts: Dict[UUID, int] = defaultdict(int)
+        quote_counts: Dict[UUID, int] = defaultdict(int)
+        for post in posts:
+            if post.reply_to is not None:
+                reply_counts[post.reply_to] += 1
+            if post.quote_of is not None:
+                quote_counts[post.quote_of] += 1
+
+        now = datetime.now(timezone.utc)
+        window_seconds = recency_window_hours * 3600
+
+        def score(post: Post) -> float:
+            age_seconds = (now - post.created_at).total_seconds()
+            if window_seconds > 0:
+                recency_score = recency_weight * max(0.0, 1.0 - age_seconds / window_seconds)
+            else:
+                recency_score = 0.0
+            like_score = len(self.likes[post.id]) * like_weight
+            reply_score = reply_counts[post.id] * reply_weight
+            quote_score = quote_counts[post.id] * quote_weight
+            return recency_score + like_score + reply_score + quote_score
+
+        ranked = sorted(posts, key=lambda post: (score(post), post.created_at), reverse=True)
+        return ranked[:limit]
+
     def has_post(self, post_id: UUID) -> bool:
         return post_id in self.posts
 

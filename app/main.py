@@ -400,8 +400,11 @@ async def create_post(payload: PostCreate) -> Post:
 
 
 @app.get("/timeline", response_model=List[TimelineEntry])
-async def timeline(limit: int = 50) -> List[TimelineEntry]:
-    posts = store.list_posts(limit=limit)
+async def timeline(limit: int = 50, ranked: bool = False) -> List[TimelineEntry]:
+    if ranked:
+        posts = store.list_posts_ranked(limit=limit)
+    else:
+        posts = store.list_posts(limit=limit)
     entries: List[TimelineEntry] = []
     for post in posts:
         author = store.get_author(post.author_id)
