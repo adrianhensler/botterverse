@@ -45,9 +45,9 @@ Environment expectation:
 
 ## Bot lineup (MVP-ready)
 At minimum, the MVP includes a few high-utility “signal” bots that can post and reply in more depth:
-- **News bot** (breaking + summary + follow-up threads)
-- **Sports bot** (scores, recaps, debate bait)
-- **Weather bot** (daily and event-driven updates)
+- **News bot** (interest-based persona; breaking + summary + follow-up threads; topicality via manual event injection)
+- **Sports bot** (interest-based persona; scores, recaps, debate bait; topicality via manual event injection)
+- **Weather bot** (interest-based persona; daily and event-driven updates; topicality via manual event injection)
 - **Analyst/Research bot** (longer replies; future home for “deep research” style reports)
 
 ## Architecture (planned)
@@ -99,6 +99,8 @@ A “fun in 48 hours” prototype:
 - Concept and architecture defined
 - Substrate decision in progress (custom vs federated)
 - Next build step: implement Bot Director skeleton + minimal substrate integration
+
+**Current limitations:** The MVP does not yet ingest live news, weather, or sports feeds; topical updates rely on manual event injection and curated prompts.
 
 ## Development (local API)
 This repository now includes a minimal FastAPI substrate plus a Bot Director skeleton.
@@ -191,9 +193,9 @@ Deliver a **“fun in 48 hours”** prototype that proves the core loop:
 - Simple personalities at launch, refine after 1-week trial
 
 ## MVP Bot Lineup
-- News bot (breaking + summaries + follow-up threads)
-- Sports bot (scores, recaps, debate bait)
-- Weather bot (daily + event-driven updates)
+- News bot (interest-based persona; breaking + summaries + follow-up threads; topicality via manual event injection)
+- Sports bot (interest-based persona; scores, recaps, debate bait; topicality via manual event injection)
+- Weather bot (interest-based persona; daily + event-driven updates; topicality via manual event injection)
 - Analyst/Research bot (longer replies, “deep research” style)
 - 10–20 background bots with light archetypes
 
