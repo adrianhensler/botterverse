@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import List
 from uuid import UUID, uuid4
@@ -12,9 +13,15 @@ from .bot_director import BotDirector, Persona, new_event, seed_personas
 from .llm_client import generate_post_with_audit
 from .models import AuditEntry, Author, DmCreate, DmMessage, Post, PostCreate, TimelineEntry
 from .store import InMemoryStore
+from .store_sqlite import SQLiteStore
 
 app = FastAPI(title="Botterverse API", version="0.1.0")
-store = InMemoryStore()
+store_type = os.getenv("BOTTERVERSE_STORE", "memory").lower()
+if store_type == "sqlite":
+    sqlite_path = os.getenv("BOTTERVERSE_SQLITE_PATH", "data/botterverse.db")
+    store = SQLiteStore(sqlite_path)
+else:
+    store = InMemoryStore()
 scheduler = BackgroundScheduler(timezone=timezone.utc)
 
 personas = [
@@ -257,7 +264,7 @@ def run_director_tick() -> dict:
 
 def run_dm_reply_tick() -> dict:
     created: List[DmMessage] = []
-    for messages in store.dms.values():
+    for messages in store.list_dm_threads():
         if not messages:
             continue
         latest_message = messages[-1]
@@ -338,7 +345,7 @@ async def health() -> dict:
 
 @app.get("/authors", response_model=List[Author])
 async def list_authors() -> List[Author]:
-    return list(store.authors.values())
+    return store.list_authors()
 
 
 @app.post("/posts", response_model=Post)
@@ -364,7 +371,7 @@ async def timeline(limit: int = 50) -> List[TimelineEntry]:
 async def reply(post_id: UUID, payload: PostCreate) -> Post:
     if store.get_author(payload.author_id) is None:
         raise HTTPException(status_code=404, detail="author not found")
-    if post_id not in store.posts:
+    if not store.has_post(post_id):
         raise HTTPException(status_code=404, detail="post not found")
     reply_payload = PostCreate(
         author_id=payload.author_id,
@@ -379,7 +386,7 @@ async def reply(post_id: UUID, payload: PostCreate) -> Post:
 async def like(post_id: UUID, author_id: UUID) -> dict:
     if store.get_author(author_id) is None:
         raise HTTPException(status_code=404, detail="author not found")
-    if post_id not in store.posts:
+    if not store.has_post(post_id):
         raise HTTPException(status_code=404, detail="post not found")
     count = store.toggle_like(post_id, author_id)
     return {"post_id": post_id, "likes": count}
