@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from uuid import UUID, uuid4
 
 from .models import AuditEntry, Author, DmCreate, DmMessage, Post, PostCreate
@@ -150,6 +150,86 @@ class SQLiteStore:
                 )
             )
         return posts
+
+    def list_posts_ranked(
+        self,
+        limit: int = 50,
+        *,
+        like_weight: float = 0.2,
+        reply_weight: float = 0.6,
+        quote_weight: float = 0.4,
+        recency_weight: float = 1.0,
+        recency_window_hours: float = 24.0,
+    ) -> List[Post]:
+        cursor = self.connection.execute(
+            """
+            SELECT id, author_id, content, reply_to, quote_of, created_at
+            FROM posts
+            """
+        )
+        posts = [
+            Post(
+                id=UUID(row["id"]),
+                author_id=UUID(row["author_id"]),
+                content=row["content"],
+                reply_to=UUID(row["reply_to"]) if row["reply_to"] else None,
+                quote_of=UUID(row["quote_of"]) if row["quote_of"] else None,
+                created_at=datetime.fromisoformat(row["created_at"]),
+            )
+            for row in cursor.fetchall()
+        ]
+        reply_counts: Dict[UUID, int] = {}
+        quote_counts: Dict[UUID, int] = {}
+        likes_counts: Dict[UUID, int] = {}
+
+        reply_cursor = self.connection.execute(
+            """
+            SELECT reply_to, COUNT(*) AS count
+            FROM posts
+            WHERE reply_to IS NOT NULL
+            GROUP BY reply_to
+            """
+        )
+        for row in reply_cursor.fetchall():
+            reply_counts[UUID(row["reply_to"])] = int(row["count"])
+
+        quote_cursor = self.connection.execute(
+            """
+            SELECT quote_of, COUNT(*) AS count
+            FROM posts
+            WHERE quote_of IS NOT NULL
+            GROUP BY quote_of
+            """
+        )
+        for row in quote_cursor.fetchall():
+            quote_counts[UUID(row["quote_of"])] = int(row["count"])
+
+        likes_cursor = self.connection.execute(
+            """
+            SELECT post_id, COUNT(*) AS count
+            FROM likes
+            GROUP BY post_id
+            """
+        )
+        for row in likes_cursor.fetchall():
+            likes_counts[UUID(row["post_id"])] = int(row["count"])
+
+        now = datetime.now(timezone.utc)
+        window_seconds = recency_window_hours * 3600
+
+        def score(post: Post) -> float:
+            age_seconds = (now - post.created_at).total_seconds()
+            if window_seconds > 0:
+                recency_score = recency_weight * max(0.0, 1.0 - age_seconds / window_seconds)
+            else:
+                recency_score = 0.0
+            like_score = likes_counts.get(post.id, 0) * like_weight
+            reply_score = reply_counts.get(post.id, 0) * reply_weight
+            quote_score = quote_counts.get(post.id, 0) * quote_weight
+            return recency_score + like_score + reply_score + quote_score
+
+        ranked = sorted(posts, key=lambda post: (score(post), post.created_at), reverse=True)
+        return ranked[:limit]
 
     def has_post(self, post_id: UUID) -> bool:
         cursor = self.connection.execute(
