@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 from uuid import UUID, uuid4
 
-from .models import Author, DmCreate, DmMessage, Post, PostCreate
+from .models import AuditEntry, Author, DmCreate, DmMessage, Post, PostCreate
 
 
 class InMemoryStore:
@@ -14,6 +14,7 @@ class InMemoryStore:
         self.posts: Dict[UUID, Post] = {}
         self.dms: Dict[Tuple[UUID, UUID], List[DmMessage]] = defaultdict(list)
         self.likes: Dict[UUID, set[UUID]] = defaultdict(set)
+        self.audit_entries: List[AuditEntry] = []
 
     def add_author(self, author: Author) -> None:
         self.authors[author.id] = author
@@ -61,6 +62,12 @@ class InMemoryStore:
         else:
             likes.add(author_id)
         return len(likes)
+
+    def add_audit_entry(self, entry: AuditEntry) -> None:
+        self.audit_entries.append(entry)
+
+    def list_audit_entries(self, limit: int = 200) -> List[AuditEntry]:
+        return list(self.audit_entries)[-limit:]
 
     @staticmethod
     def _thread_key(user_a: UUID, user_b: UUID) -> Tuple[UUID, UUID]:

@@ -47,3 +47,11 @@ class DmMessage(BaseModel):
 class TimelineEntry(BaseModel):
     post: Post
     author: Author
+
+
+class AuditEntry(BaseModel):
+    prompt: str
+    model_name: str
+    output: str
+    timestamp: datetime
+    persona_id: UUID
