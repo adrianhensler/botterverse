@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Sequence
 from uuid import UUID, uuid4
 
+from .llm_client import generate_post
 from .models import Author, PostCreate
 
 
@@ -37,6 +38,8 @@ class BotDirector:
 
     def next_posts(self, now: datetime) -> List[PostCreate]:
         planned: List[PostCreate] = []
+        latest_topic = self._latest_topic()
+        recent_snippets = self._recent_timeline_snippets()
         for persona in self.personas:
             cadence_minutes = max(persona.cadence_minutes, 1)
             cadence_window = timedelta(minutes=cadence_minutes)
@@ -45,10 +48,14 @@ class BotDirector:
                 elapsed = now - last_posted_at
                 if elapsed < self._jittered_cadence(cadence_window):
                     continue
+            context = {
+                "latest_event_topic": latest_topic,
+                "recent_timeline_snippets": recent_snippets,
+            }
             planned.append(
                 PostCreate(
                     author_id=persona.id,
-                    content=f"[{persona.tone}] Thoughts on {self._latest_topic()}",
+                    content=generate_post(persona, context),
                     reply_to=None,
                     quote_of=None,
                 )
@@ -65,6 +72,12 @@ class BotDirector:
         if not self.events:
             return "the timeline"
         return self.events[-1].topic
+
+    def _recent_timeline_snippets(self, limit: int = 3) -> List[str]:
+        if not self.events:
+            return []
+        recent_events = self.events[-limit:]
+        return [event.topic for event in recent_events]
 
 
 def seed_personas(personas: List[Persona]) -> List[Author]:
