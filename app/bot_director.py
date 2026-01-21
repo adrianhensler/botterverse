@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 from collections import defaultdict
 from dataclasses import dataclass
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, List, Sequence
 from uuid import UUID, uuid4
@@ -27,6 +28,8 @@ class Persona:
 class BotEvent:
     id: UUID
     topic: str
+    kind: str
+    payload: Dict[str, object]
     created_at: datetime
 
 
@@ -95,6 +98,7 @@ class BotDirector:
             "latest_event_topic": event.topic,
             "recent_timeline_snippets": [event.topic, *recent_snippets],
             "event_context": self._event_context(event),
+            "event_payload": event.payload,
         }
         return PostCreate(
             author_id=persona.id,
@@ -114,6 +118,7 @@ class BotDirector:
             "latest_event_topic": latest_topic,
             "recent_timeline_snippets": recent_snippets,
             "event_context": self._event_context(latest_event) if latest_event else "",
+            "event_payload": latest_event.payload if latest_event else {},
         }
         return PostCreate(
             author_id=persona.id,
@@ -143,6 +148,7 @@ class BotDirector:
             "reply_to_post": "" if use_quote else target.content,
             "quote_of_post": target.content if use_quote else "",
             "event_context": self._event_context(latest_event) if latest_event else "",
+            "event_payload": latest_event.payload if latest_event else {},
         }
         self.replied_post_ids[persona.id].add(target.id)
         return PostCreate(
@@ -207,7 +213,7 @@ class BotDirector:
         return [event.topic for event in recent_events]
 
     def _schedule_reactions(self, event: BotEvent) -> None:
-        matching_personas = [persona for persona in self.personas if self._event_matches_interests(persona, event)]
+        matching_personas = self._personas_for_event(event)
         if not matching_personas:
             return
         window_minutes = random.randint(2, 10)
@@ -244,7 +250,25 @@ class BotDirector:
         if event is None:
             return ""
         timestamp = event.created_at.astimezone(timezone.utc).isoformat()
-        return f"Event '{event.topic}' reported at {timestamp}."
+        payload_summary = self._format_event_payload(event)
+        return f"Event '{event.topic}' reported at {timestamp}. {payload_summary}".strip()
+
+    def _format_event_payload(self, event: BotEvent) -> str:
+        if not event.payload:
+            return ""
+        serialized = json.dumps(event.payload, default=str, ensure_ascii=False)
+        return f"Payload: {serialized}"
+
+    def _personas_for_event(self, event: BotEvent) -> List[Persona]:
+        kind_map = {
+            "news": {"newswire", "globaldesk", "civicwatch", "techbrief", "marketminute"},
+            "weather": {"weatherguy", "commutecheck", "farmreport"},
+            "sports": {"stadiumpulse", "statline"},
+        }
+        if event.kind in kind_map:
+            handles = kind_map[event.kind]
+            return [persona for persona in self.personas if persona.handle in handles]
+        return [persona for persona in self.personas if self._event_matches_interests(persona, event)]
 
 
 def seed_personas(personas: List[Persona]) -> List[Author]:
@@ -259,5 +283,11 @@ def seed_personas(personas: List[Persona]) -> List[Author]:
     ]
 
 
-def new_event(topic: str) -> BotEvent:
-    return BotEvent(id=uuid4(), topic=topic, created_at=datetime.now(timezone.utc))
+def new_event(topic: str, kind: str = "generic", payload: Dict[str, object] | None = None) -> BotEvent:
+    return BotEvent(
+        id=uuid4(),
+        topic=topic,
+        kind=kind,
+        payload=payload or {},
+        created_at=datetime.now(timezone.utc),
+    )
