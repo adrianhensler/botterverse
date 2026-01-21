@@ -25,6 +25,9 @@ class InMemoryStore:
     def list_authors(self) -> List[Author]:
         return list(self.authors.values())
 
+    def get_post(self, post_id: UUID) -> Optional[Post]:
+        return self.posts.get(post_id)
+
     def create_post(self, payload: PostCreate) -> Post:
         post_id = uuid4()
         created_at = datetime.now(timezone.utc)
@@ -116,6 +119,137 @@ class InMemoryStore:
 
     def list_audit_entries(self, limit: int = 200) -> List[AuditEntry]:
         return list(self.audit_entries)[-limit:]
+
+    def export_dataset(self) -> dict:
+        authors = sorted(self.authors.values(), key=lambda author: author.handle)
+        posts = sorted(self.posts.values(), key=lambda post: (post.created_at, str(post.id)))
+        dms = sorted(
+            [message for thread in self.dms.values() for message in thread],
+            key=lambda message: (message.created_at, str(message.id)),
+        )
+        likes = sorted(
+            [
+                {"post_id": str(post_id), "author_id": str(author_id)}
+                for post_id, author_ids in self.likes.items()
+                for author_id in author_ids
+            ],
+            key=lambda item: (item["post_id"], item["author_id"]),
+        )
+        audit_entries = sorted(
+            self.audit_entries,
+            key=lambda entry: (entry.timestamp, str(entry.persona_id), str(entry.post_id or "")),
+        )
+        return {
+            "metadata": {
+                "version": 1,
+                "exported_at": datetime.now(timezone.utc).isoformat(),
+                "counts": {
+                    "authors": len(authors),
+                    "posts": len(posts),
+                    "dms": len(dms),
+                    "likes": len(likes),
+                    "audit_entries": len(audit_entries),
+                },
+            },
+            "authors": [
+                {
+                    "id": str(author.id),
+                    "handle": author.handle,
+                    "display_name": author.display_name,
+                    "type": author.type,
+                }
+                for author in authors
+            ],
+            "posts": [
+                {
+                    "id": str(post.id),
+                    "author_id": str(post.author_id),
+                    "content": post.content,
+                    "reply_to": str(post.reply_to) if post.reply_to else None,
+                    "quote_of": str(post.quote_of) if post.quote_of else None,
+                    "created_at": post.created_at.isoformat(),
+                }
+                for post in posts
+            ],
+            "dms": [
+                {
+                    "id": str(message.id),
+                    "sender_id": str(message.sender_id),
+                    "recipient_id": str(message.recipient_id),
+                    "content": message.content,
+                    "created_at": message.created_at.isoformat(),
+                }
+                for message in dms
+            ],
+            "likes": likes,
+            "audit_entries": [
+                {
+                    "prompt": entry.prompt,
+                    "model_name": entry.model_name,
+                    "output": entry.output,
+                    "timestamp": entry.timestamp.isoformat(),
+                    "persona_id": str(entry.persona_id),
+                    "post_id": str(entry.post_id) if entry.post_id else None,
+                    "dm_id": str(entry.dm_id) if entry.dm_id else None,
+                }
+                for entry in audit_entries
+            ],
+        }
+
+    def import_dataset(self, payload: dict) -> None:
+        self.authors.clear()
+        self.posts.clear()
+        self.dms.clear()
+        self.likes.clear()
+        self.audit_entries.clear()
+
+        for author in payload.get("authors", []):
+            parsed = Author(
+                id=UUID(author["id"]),
+                handle=author["handle"],
+                display_name=author["display_name"],
+                type=author["type"],
+            )
+            self.authors[parsed.id] = parsed
+
+        for post in payload.get("posts", []):
+            parsed = Post(
+                id=UUID(post["id"]),
+                author_id=UUID(post["author_id"]),
+                content=post["content"],
+                reply_to=UUID(post["reply_to"]) if post.get("reply_to") else None,
+                quote_of=UUID(post["quote_of"]) if post.get("quote_of") else None,
+                created_at=datetime.fromisoformat(post["created_at"]),
+            )
+            self.posts[parsed.id] = parsed
+
+        for message in payload.get("dms", []):
+            parsed = DmMessage(
+                id=UUID(message["id"]),
+                sender_id=UUID(message["sender_id"]),
+                recipient_id=UUID(message["recipient_id"]),
+                content=message["content"],
+                created_at=datetime.fromisoformat(message["created_at"]),
+            )
+            thread_key = self._thread_key(parsed.sender_id, parsed.recipient_id)
+            self.dms[thread_key].append(parsed)
+
+        for like in payload.get("likes", []):
+            post_id = UUID(like["post_id"])
+            author_id = UUID(like["author_id"])
+            self.likes[post_id].add(author_id)
+
+        for entry in payload.get("audit_entries", []):
+            parsed = AuditEntry(
+                prompt=entry["prompt"],
+                model_name=entry["model_name"],
+                output=entry["output"],
+                timestamp=datetime.fromisoformat(entry["timestamp"]),
+                persona_id=UUID(entry["persona_id"]),
+                post_id=UUID(entry["post_id"]) if entry.get("post_id") else None,
+                dm_id=UUID(entry["dm_id"]) if entry.get("dm_id") else None,
+            )
+            self.audit_entries.append(parsed)
 
     @staticmethod
     def _thread_key(user_a: UUID, user_b: UUID) -> Tuple[UUID, UUID]:
