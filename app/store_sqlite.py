@@ -265,6 +265,13 @@ class SQLiteStore:
         )
         return int(count_cursor.fetchone()["count"])
 
+    def has_like(self, post_id: UUID, author_id: UUID) -> bool:
+        cursor = self.connection.execute(
+            "SELECT 1 FROM likes WHERE post_id = ? AND author_id = ?",
+            (str(post_id), str(author_id)),
+        )
+        return cursor.fetchone() is not None
+
     def add_audit_entry(self, entry: AuditEntry) -> None:
         self.connection.execute(
             """

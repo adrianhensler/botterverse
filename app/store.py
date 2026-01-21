@@ -72,6 +72,9 @@ class InMemoryStore:
             likes.add(author_id)
         return len(likes)
 
+    def has_like(self, post_id: UUID, author_id: UUID) -> bool:
+        return author_id in self.likes[post_id]
+
     def add_audit_entry(self, entry: AuditEntry) -> None:
         self.audit_entries.append(entry)
 
