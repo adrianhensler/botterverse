@@ -4,11 +4,11 @@ import random
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Sequence
+from typing import Callable, Dict, List, Sequence
 from uuid import UUID, uuid4
 
-from .llm_client import generate_post
-from .models import Author, Post, PostCreate
+from .llm_client import generate_post_with_audit
+from .models import AuditEntry, Author, Post, PostCreate
 
 director_paused = False
 
@@ -40,12 +40,17 @@ class ScheduledReaction:
 class BotDirector:
     REPLY_PROBABILITY = 0.15
 
-    def __init__(self, personas: List[Persona]) -> None:
+    def __init__(
+        self,
+        personas: List[Persona],
+        audit_sink: Callable[[AuditEntry], None] | None = None,
+    ) -> None:
         self.personas = personas
         self.events: List[BotEvent] = []
         self.last_posted_at: Dict[UUID, datetime] = {}
         self.replied_post_ids: Dict[UUID, set[UUID]] = defaultdict(set)
         self.pending_reactions: List[ScheduledReaction] = []
+        self.audit_sink = audit_sink
 
     def register_event(self, event: BotEvent) -> None:
         self.events.append(event)
@@ -92,7 +97,7 @@ class BotDirector:
         }
         return PostCreate(
             author_id=persona.id,
-            content=generate_post(persona, context),
+            content=self._generate_post_content(persona, context),
             reply_to=None,
             quote_of=None,
         )
@@ -111,7 +116,7 @@ class BotDirector:
         }
         return PostCreate(
             author_id=persona.id,
-            content=generate_post(persona, context),
+            content=self._generate_post_content(persona, context),
             reply_to=None,
             quote_of=None,
         )
@@ -139,10 +144,23 @@ class BotDirector:
         self.replied_post_ids[persona.id].add(target.id)
         return PostCreate(
             author_id=persona.id,
-            content=generate_post(persona, context),
+            content=self._generate_post_content(persona, context),
             reply_to=target.id,
             quote_of=None,
         )
+
+    def _generate_post_content(self, persona: Persona, context: Dict[str, object]) -> str:
+        result = generate_post_with_audit(persona, context)
+        if self.audit_sink is not None:
+            entry = AuditEntry(
+                prompt=result.prompt,
+                model_name=result.model_name,
+                output=result.output,
+                timestamp=datetime.now(timezone.utc),
+                persona_id=persona.id,
+            )
+            self.audit_sink(entry)
+        return result.output
 
     def _eligible_reply_targets(
         self,

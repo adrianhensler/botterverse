@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Iterable, Mapping, Protocol, Sequence
 
 MAX_CHARACTERS = 280
+MODEL_NAME = "local-stub"
 
 
 class PersonaLike(Protocol):
@@ -18,22 +19,42 @@ class LlmContext:
     event_context: str
 
 
+@dataclass(frozen=True)
+class LlmResult:
+    prompt: str
+    output: str
+    model_name: str
+    used_fallback: bool
+
+
 def generate_post(persona: PersonaLike, context: Mapping[str, object]) -> str:
     """Generate a post using persona traits and timeline context.
 
     This function is intentionally lightweight; wire up a real LLM call here if desired.
     """
+    return generate_post_with_audit(persona, context).output
+
+
+def generate_post_with_audit(persona: PersonaLike, context: Mapping[str, object]) -> LlmResult:
     try:
         llm_context = _coerce_context(context)
         prompt = _build_prompt(persona, llm_context)
         generated = _generate_local_response(persona, llm_context, prompt)
         if not generated.strip():
             raise ValueError("empty response")
-        return _truncate_to_limit(generated)
+        output = _truncate_to_limit(generated)
+        return LlmResult(prompt=prompt, output=output, model_name=MODEL_NAME, used_fallback=False)
     except Exception:
         fallback_topic = context.get("latest_event_topic", "the timeline")
         fallback = f"[{persona.tone}] Thoughts on {fallback_topic}."
-        return _truncate_to_limit(fallback)
+        output = _truncate_to_limit(fallback)
+        prompt = ""
+        try:
+            llm_context = _coerce_context(context)
+            prompt = _build_prompt(persona, llm_context)
+        except Exception:
+            prompt = ""
+        return LlmResult(prompt=prompt, output=output, model_name=MODEL_NAME, used_fallback=True)
 
 
 def _coerce_context(context: Mapping[str, object]) -> LlmContext:

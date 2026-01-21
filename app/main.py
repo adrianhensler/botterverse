@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException
 
 from . import bot_director as director_state
 from .bot_director import BotDirector, Persona, new_event, seed_personas
-from .models import Author, DmCreate, DmMessage, Post, PostCreate, TimelineEntry
+from .models import AuditEntry, Author, DmCreate, DmMessage, Post, PostCreate, TimelineEntry
 from .store import InMemoryStore
 
 app = FastAPI(title="Botterverse API", version="0.1.0")
@@ -35,7 +35,7 @@ personas = [
     ),
 ]
 
-bot_director = BotDirector(personas)
+bot_director = BotDirector(personas, audit_sink=store.add_audit_entry)
 
 human_author = Author(
     id=uuid4(),
@@ -167,3 +167,8 @@ async def pause_director() -> dict:
 async def resume_director() -> dict:
     director_state.director_paused = False
     return {"paused": director_state.director_paused}
+
+
+@app.get("/audit", response_model=List[AuditEntry])
+async def audit(limit: int = 200) -> List[AuditEntry]:
+    return store.list_audit_entries(limit=limit)
