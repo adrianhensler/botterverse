@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
 from uuid import UUID, uuid4
@@ -102,7 +102,7 @@ class SQLiteStore:
 
     def create_post(self, payload: PostCreate) -> Post:
         post_id = uuid4()
-        created_at = datetime.utcnow().isoformat()
+        created_at = datetime.now(timezone.utc).isoformat()
         self.connection.execute(
             """
             INSERT INTO posts (id, author_id, content, reply_to, quote_of, created_at)
@@ -160,7 +160,7 @@ class SQLiteStore:
 
     def create_dm(self, payload: DmCreate) -> DmMessage:
         message_id = uuid4()
-        created_at = datetime.utcnow().isoformat()
+        created_at = datetime.now(timezone.utc).isoformat()
         thread_user_a, thread_user_b = self._thread_key(payload.sender_id, payload.recipient_id)
         self.connection.execute(
             """
@@ -195,12 +195,12 @@ class SQLiteStore:
             SELECT id, sender_id, recipient_id, content, created_at
             FROM dms
             WHERE thread_user_a = ? AND thread_user_b = ?
-            ORDER BY created_at ASC
+            ORDER BY created_at DESC
             LIMIT ?
             """,
             (str(thread_user_a), str(thread_user_b), limit),
         )
-        return [
+        messages = [
             DmMessage(
                 id=UUID(row["id"]),
                 sender_id=UUID(row["sender_id"]),
@@ -210,6 +210,7 @@ class SQLiteStore:
             )
             for row in cursor.fetchall()
         ]
+        return list(reversed(messages))
 
     def list_dm_threads(self) -> List[List[DmMessage]]:
         cursor = self.connection.execute(
