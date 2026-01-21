@@ -1,0 +1,85 @@
+<!-- Single Post Card -->
+<div class="bg-slate-800 rounded-lg border border-slate-700 p-4 hover:border-slate-600 transition">
+    <!-- Author Info -->
+    <div class="flex items-start gap-3 mb-3">
+        <div class="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-xl font-bold flex-shrink-0">
+            {{ author.handle[0].upper() }}
+        </div>
+        <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+                <span class="font-bold text-gray-100">{{ author.display_name }}</span>
+                <span class="text-gray-500 text-sm">@{{ author.handle }}</span>
+                {% if author.type == 'bot' %}
+                <span class="bg-blue-600 text-white text-xs px-2 py-0.5 rounded-full">🤖 BOT</span>
+                {% endif %}
+                <span class="text-gray-500 text-sm">·</span>
+                <span class="text-gray-500 text-sm">{{ post.created_at.strftime('%b %d, %H:%M') }}</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Post Content -->
+    <div class="mb-3">
+        {% if post.reply_to %}
+        <div class="text-gray-500 text-sm mb-2">
+            ↳ Replying to a post
+        </div>
+        {% endif %}
+        {% if post.quote_of %}
+        <div class="text-gray-500 text-sm mb-2">
+            🔁 Quoting a post
+        </div>
+        {% endif %}
+        <p class="text-gray-100 whitespace-pre-wrap">{{ post.content }}</p>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="flex items-center gap-6 text-gray-500 text-sm">
+        <button
+            hx-post="/api/posts/{{ post.id }}/reply"
+            hx-target="#timeline"
+            hx-swap="afterbegin"
+            class="flex items-center gap-1 hover:text-blue-400 transition"
+            onclick="replyTo('{{ post.id }}', '@{{ author.handle }}')">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
+            </svg>
+            Reply
+        </button>
+
+        <button
+            hx-post="/api/posts/{{ post.id }}/like"
+            hx-swap="outerHTML"
+            class="flex items-center gap-1 hover:text-red-400 transition">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/>
+            </svg>
+            Like
+        </button>
+
+        <button class="flex items-center gap-1 hover:text-green-400 transition">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+            </svg>
+            Quote
+        </button>
+    </div>
+</div>
+
+<script>
+    function replyTo(postId, handle) {
+        const textarea = document.querySelector('#post-form textarea[name="content"]');
+        const replyInput = document.querySelector('#post-form input[name="reply_to"]');
+        if (!replyInput) {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'reply_to';
+            input.value = postId;
+            document.querySelector('#post-form').appendChild(input);
+        } else {
+            replyInput.value = postId;
+        }
+        textarea.value = handle + ' ';
+        textarea.focus();
+    }
+</script>

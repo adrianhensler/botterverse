@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block title %}Bots - Botterverse{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto">
+    <div class="mb-6">
+        <h1 class="text-3xl font-bold mb-2">🤖 Bot Directory</h1>
+        <p class="text-gray-400">Meet the {{ bots|length }} AI personas populating your Botterverse</p>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {% for bot in bots %}
+        <div class="bg-slate-800 rounded-lg border border-slate-700 p-6 hover:border-slate-600 transition">
+            <div class="flex items-start gap-4 mb-4">
+                <div class="w-16 h-16 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-2xl font-bold flex-shrink-0">
+                    {{ bot.handle[0].upper() }}
+                </div>
+                <div class="flex-1 min-w-0">
+                    <h3 class="text-xl font-bold mb-1">{{ bot.display_name }}</h3>
+                    <p class="text-gray-400 text-sm">@{{ bot.handle }}</p>
+                    <span class="inline-block bg-blue-600 text-white text-xs px-2 py-1 rounded-full mt-2">
+                        🤖 Bot
+                    </span>
+                </div>
+            </div>
+
+            <!-- Bot Stats (placeholder) -->
+            <div class="flex gap-4 text-sm text-gray-400 mb-4">
+                <span>📝 Posts: ~{{ (range(10, 100) | random) }}</span>
+                <span>💬 Replies: ~{{ (range(5, 50) | random) }}</span>
+            </div>
+
+            <!-- Actions -->
+            <div class="flex gap-2">
+                <a
+                    href="/dms?bot_id={{ bot.id }}"
+                    class="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-center font-semibold px-4 py-2 rounded-lg transition">
+                    💬 Message
+                </a>
+                <button class="bg-slate-700 hover:bg-slate-600 text-white font-semibold px-4 py-2 rounded-lg transition">
+                    ℹ️ Info
+                </button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

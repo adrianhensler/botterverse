@@ -12,6 +12,9 @@ from uuid import UUID, uuid4
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
 
 from . import bot_director as director_state
 from .bot_director import BotDirector, Persona, new_event, seed_personas
@@ -25,9 +28,22 @@ from .models import AuditEntry, AuditEntryWithPost, Author, DmCreate, DmMessage,
 from .store_factory import build_store
 
 app = FastAPI(title="Botterverse API", version="0.1.0")
+
+# Enable CORS for remote access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for remote access
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all headers
+)
+
 logger = logging.getLogger("botterverse")
 store = build_store()
 scheduler = BackgroundScheduler(timezone=timezone.utc)
+
+# Templates setup
+templates = Jinja2Templates(directory="app/templates")
 
 personas = [
     Persona(
@@ -612,3 +628,193 @@ async def export_timeline(limit: int = 200) -> List[dict]:
             }
         )
     return timeline
+
+
+# ============================================================================
+# HTML/Web GUI Routes
+# ============================================================================
+
+@app.get("/", response_class=HTMLResponse)
+async def home(request: Request):
+    """Homepage - Timeline view"""
+    authors = store.list_authors()
+    human_author = next((a for a in authors if a.type == "human"), None)
+    bots = [a for a in authors if a.type == "bot"]
+
+    return templates.TemplateResponse("timeline.html", {
+        "request": request,
+        "human_author": human_author,
+        "bot_count": len(bots),
+        "post_count": store.count_posts()
+    })
+
+
+@app.get("/api/timeline-html", response_class=HTMLResponse)
+async def timeline_html(request: Request):
+    """HTMX endpoint - Returns timeline posts as HTML"""
+    posts = store.list_posts(limit=50)
+    html_parts = []
+
+    # Get the template
+    template = templates.env.get_template("post_card.html")
+
+    for post in posts:
+        author = store.get_author(post.author_id)
+        if not author:
+            continue
+        # Render template to string
+        html = template.render(request=request, post=post, author=author)
+        html_parts.append(html)
+
+    return HTMLResponse(content="".join(html_parts))
+
+
+@app.post("/api/posts-html", response_class=HTMLResponse)
+async def create_post_html(request: Request):
+    """HTMX endpoint - Create post and return HTML"""
+    form_data = await request.form()
+    author_id_str = form_data.get("author_id")
+    content = form_data.get("content")
+    reply_to_str = form_data.get("reply_to")
+
+    # Handle empty strings
+    author_id = UUID(author_id_str) if author_id_str else None
+    reply_to = UUID(reply_to_str) if reply_to_str and reply_to_str.strip() else None
+
+    if not author_id or not content:
+        return HTMLResponse(content="<p class='text-red-500'>Missing required fields</p>", status_code=400)
+
+    payload = PostCreate(
+        author_id=author_id,
+        content=content,
+        reply_to=reply_to
+    )
+    post = store.create_post(payload)
+    author = store.get_author(post.author_id)
+
+    # Get the template and render
+    template = templates.env.get_template("post_card.html")
+    html = template.render(request=request, post=post, author=author)
+
+    return HTMLResponse(content=html)
+
+
+@app.get("/dms", response_class=HTMLResponse)
+async def dms_page(request: Request, bot_id: str = None):
+    """DMs page"""
+    authors = store.list_authors()
+    human_author = next((a for a in authors if a.type == "human"), None)
+    bots = [a for a in authors if a.type == "bot"]
+
+    selected_bot = None
+    if bot_id:
+        selected_bot = store.get_author(UUID(bot_id))
+
+    return templates.TemplateResponse("dms.html", {
+        "request": request,
+        "human_author": human_author,
+        "bots": bots,
+        "selected_bot": selected_bot
+    })
+
+
+@app.get("/api/dms-html", response_class=HTMLResponse)
+async def dms_html(request: Request, bot_id: str):
+    """HTMX endpoint - Returns DM messages as HTML"""
+    authors = store.list_authors()
+    human_author = next((a for a in authors if a.type == "human"), None)
+    bot = store.get_author(UUID(bot_id))
+
+    if not human_author or not bot:
+        return HTMLResponse(content="<p class='text-gray-400'>Error loading messages</p>")
+
+    messages = store.list_dm_thread(human_author.id, bot.id, limit=100)
+    html_parts = []
+
+    # Get the template
+    template = templates.env.get_template("message.html")
+
+    for msg in messages:
+        # Render template to string
+        html = template.render(
+            request=request,
+            message=msg,
+            human_author=human_author,
+            bot_name=bot.display_name
+        )
+        html_parts.append(html)
+
+    return HTMLResponse(content="".join(html_parts))
+
+
+@app.post("/api/dms-send", response_class=HTMLResponse)
+async def send_dm_html(request: Request):
+    """HTMX endpoint - Send DM and return message HTML"""
+    form_data = await request.form()
+    sender_id = UUID(form_data.get("sender_id"))
+    recipient_id = UUID(form_data.get("recipient_id"))
+    content = form_data.get("content")
+
+    payload = DmCreate(
+        sender_id=sender_id,
+        recipient_id=recipient_id,
+        content=content
+    )
+    message = store.create_dm(payload)
+
+    authors = store.list_authors()
+    human_author = next((a for a in authors if a.type == "human"), None)
+    bot = store.get_author(recipient_id)
+
+    # Get the template
+    template = templates.env.get_template("message.html")
+
+    # Render template to string
+    html = template.render(
+        request=request,
+        message=message,
+        human_author=human_author,
+        bot_name=bot.display_name if bot else "Bot"
+    )
+
+    return HTMLResponse(content=html)
+
+
+@app.get("/bots", response_class=HTMLResponse)
+async def bots_page(request: Request):
+    """Bots directory page"""
+    authors = store.list_authors()
+    bots = [a for a in authors if a.type == "bot"]
+
+    return templates.TemplateResponse("bots.html", {
+        "request": request,
+        "bots": bots
+    })
+
+
+@app.post("/api/inject-event")
+async def inject_event_html(topic: str, kind: str = "generic"):
+    """Inject event and trigger bot reactions"""
+    event = new_event(topic, kind=kind)
+    bot_director.register_event(event)
+
+    # Trigger a tick to create reactions
+    now = datetime.now(timezone.utc)
+    recent_posts = store.list_posts(limit=50)
+    planned = bot_director.next_posts(now, recent_posts)
+
+    for planned_post in planned[:5]:  # Limit to 5 immediate reactions
+        created_post = store.create_post(planned_post.payload)
+        if planned_post.audit_entry:
+            store.add_audit_entry(
+                AuditEntry(
+                    prompt=planned_post.audit_entry.prompt,
+                    model_name=planned_post.audit_entry.model_name,
+                    output=planned_post.audit_entry.output,
+                    timestamp=planned_post.audit_entry.timestamp,
+                    persona_id=planned_post.audit_entry.persona_id,
+                    post_id=created_post.id,
+                )
+            )
+
+    return {"status": "ok", "event": event, "reactions": len(planned)}

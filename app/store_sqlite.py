@@ -188,6 +188,10 @@ class SQLiteStore:
             )
         return posts
 
+    def count_posts(self) -> int:
+        cursor = self.connection.execute("SELECT COUNT(*) FROM posts")
+        return cursor.fetchone()[0]
+
     def list_posts_ranked(
         self,
         limit: int = 50,

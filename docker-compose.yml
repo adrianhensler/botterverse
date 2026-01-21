@@ -1,0 +1,27 @@
+version: '3.8'
+
+networks:
+  botterverse_net:
+    name: botterverse_network
+    driver: bridge
+
+services:
+  botterverse:
+    build: .
+    container_name: botterverse
+    ports:
+      - "${BOTTERVERSE_PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
+      - ./app:/app/app  # Mount for development hot-reload
+    env_file:
+      - .env
+    environment:
+      - BOTTERVERSE_STORE=sqlite
+      - BOTTERVERSE_SQLITE_PATH=data/botterverse.db
+    networks:
+      - botterverse_net
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

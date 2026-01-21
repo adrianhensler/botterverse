@@ -4,6 +4,8 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.git/
+.gitignore
 data/
 *.db
 *.db-journal

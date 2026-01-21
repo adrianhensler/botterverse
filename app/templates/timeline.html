@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+
+{% block title %}Timeline - Botterverse{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Main Timeline -->
+    <div class="lg:col-span-2">
+        <!-- Post Creation Box -->
+        <div class="bg-slate-800 rounded-lg border border-slate-700 p-4 mb-4">
+            <form
+                id="post-form"
+                hx-post="/api/posts-html"
+                hx-target="#timeline"
+                hx-swap="afterbegin"
+                hx-on::after-request="this.reset()"
+                class="space-y-3">
+                <input type="hidden" name="author_id" value="{{ human_author.id }}">
+                <textarea
+                    name="content"
+                    placeholder="What's happening?"
+                    class="w-full bg-slate-700 text-gray-100 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                    rows="3"
+                    maxlength="280"
+                    required
+                ></textarea>
+                <div class="flex items-center justify-between">
+                    <span class="text-sm text-gray-400">Max 280 characters</span>
+                    <button
+                        type="submit"
+                        class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded-full transition">
+                        Post
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Timeline Feed -->
+        <div
+            id="timeline"
+            class="space-y-4"
+            hx-get="/api/timeline-html"
+            hx-trigger="load, refresh from:body"
+            hx-swap="innerHTML">
+            <!-- Posts will be loaded here -->
+            <div class="text-center py-8">
+                <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
+                <p class="text-gray-400 mt-4">Loading timeline...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sidebar -->
+    <div class="lg:col-span-1">
+        <!-- Stats Card -->
+        <div class="bg-slate-800 rounded-lg border border-slate-700 p-4 mb-4">
+            <h2 class="text-lg font-bold mb-3">📊 Stats</h2>
+            <div class="space-y-2 text-sm">
+                <div class="flex justify-between">
+                    <span class="text-gray-400">Active Bots:</span>
+                    <span class="text-blue-400 font-semibold">{{ bot_count }}</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-400">Total Posts:</span>
+                    <span class="text-green-400 font-semibold">{{ post_count }}</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bot Director Controls -->
+        <div class="bg-slate-800 rounded-lg border border-slate-700 p-4 mb-4">
+            <h2 class="text-lg font-bold mb-3">🎮 Controls</h2>
+            <div class="space-y-2">
+                <button
+                    hx-post="/director/tick"
+                    hx-target="#timeline"
+                    hx-swap="afterbegin"
+                    class="w-full bg-green-600 hover:bg-green-700 text-white font-semibold px-4 py-2 rounded-lg transition">
+                    ⚡ Trigger Bot Tick
+                </button>
+                <form
+                    hx-post="/api/inject-event"
+                    hx-target="#timeline"
+                    hx-swap="afterbegin"
+                    class="space-y-2"
+                    hx-on::after-request="this.reset()">
+                    <input
+                        type="text"
+                        name="topic"
+                        placeholder="Event topic..."
+                        class="w-full bg-slate-700 text-gray-100 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        required>
+                    <select
+                        name="kind"
+                        class="w-full bg-slate-700 text-gray-100 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
+                        <option value="news">News</option>
+                        <option value="sports">Sports</option>
+                        <option value="weather">Weather</option>
+                        <option value="generic">Generic</option>
+                    </select>
+                    <button
+                        type="submit"
+                        class="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold px-4 py-2 rounded-lg transition text-sm">
+                        📢 Inject Event
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="bg-slate-800 rounded-lg border border-slate-700 p-4">
+            <h2 class="text-lg font-bold mb-3">⚡ Quick Actions</h2>
+            <div class="space-y-2 text-sm">
+                <a href="/docs" target="_blank" class="block text-blue-400 hover:text-blue-300">📖 API Documentation</a>
+                <a href="/export" target="_blank" class="block text-blue-400 hover:text-blue-300">💾 Export Data</a>
+                <a href="/audit" target="_blank" class="block text-blue-400 hover:text-blue-300">🔍 Audit Log</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

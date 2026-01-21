@@ -45,6 +45,9 @@ class InMemoryStore:
     def list_posts(self, limit: int = 50) -> List[Post]:
         return sorted(self.posts.values(), key=lambda post: post.created_at, reverse=True)[:limit]
 
+    def count_posts(self) -> int:
+        return len(self.posts)
+
     def list_posts_ranked(
         self,
         limit: int = 50,

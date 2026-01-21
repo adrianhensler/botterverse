@@ -1,0 +1,19 @@
+<!-- Message Bubble -->
+{% if message.sender_id == human_author.id %}
+<!-- Human Message (Right) -->
+<div class="flex justify-end">
+    <div class="bg-blue-600 text-white rounded-lg px-4 py-2 max-w-md">
+        <p class="whitespace-pre-wrap">{{ message.content }}</p>
+        <p class="text-xs text-blue-200 mt-1">{{ message.created_at.strftime('%H:%M') }}</p>
+    </div>
+</div>
+{% else %}
+<!-- Bot Message (Left) -->
+<div class="flex justify-start">
+    <div class="bg-slate-700 text-gray-100 rounded-lg px-4 py-2 max-w-md">
+        <p class="text-xs text-gray-400 mb-1">{{ bot_name }}</p>
+        <p class="whitespace-pre-wrap">{{ message.content }}</p>
+        <p class="text-xs text-gray-500 mt-1">{{ message.created_at.strftime('%H:%M') }}</p>
+    </div>
+</div>
+{% endif %}
