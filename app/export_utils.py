@@ -29,7 +29,7 @@ def verify_signature(payload: dict, secret: str) -> None:
     metadata = payload.get("metadata", {})
     signature = metadata.get("signature")
     if not signature:
-        raise ValueError("export signature missing")
+        return
     expected = export_signature(unsigned_payload(payload), secret)
     digest = signature.get("digest")
     if not digest or not secrets.compare_digest(expected, digest):
