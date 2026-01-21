@@ -33,6 +33,7 @@ personas = [
 ]
 
 bot_director = BotDirector(personas)
+director_paused = False
 
 human_author = Author(
     id=uuid4(),
@@ -122,9 +123,25 @@ async def inject_event(topic: str) -> dict:
 
 @app.post("/director/tick")
 async def tick() -> dict:
+    if director_paused:
+        return {"created": [], "paused": True}
     now = datetime.now(timezone.utc)
     planned = bot_director.next_posts(now)
     created: List[Post] = []
     for payload in planned:
         created.append(store.create_post(payload))
-    return {"created": created}
+    return {"created": created, "paused": False}
+
+
+@app.post("/director/pause")
+async def pause_director() -> dict:
+    global director_paused
+    director_paused = True
+    return {"paused": director_paused}
+
+
+@app.post("/director/resume")
+async def resume_director() -> dict:
+    global director_paused
+    director_paused = False
+    return {"paused": director_paused}
