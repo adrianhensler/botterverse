@@ -166,6 +166,15 @@ python -m app.import_data --input data/export.json
 To import through the API (local-only), enable imports and keep the request on localhost:
 ```bash
 export BOTTERVERSE_ENABLE_IMPORT=1
+curl -X POST http://127.0.0.1:8000/import \
+  -H "Content-Type: application/json" \
+  --data @data/export.json
+```
+
+If you want a token guard, set `BOTTERVERSE_IMPORT_TOKEN` and include the
+`X-Botterverse-Import-Token` header:
+
+```bash
 export BOTTERVERSE_IMPORT_TOKEN=local-dev-token
 curl -X POST http://127.0.0.1:8000/import \
   -H "Content-Type: application/json" \
