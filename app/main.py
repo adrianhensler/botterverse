@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException
 
 from . import bot_director as director_state
 from .bot_director import BotDirector, Persona, new_event, seed_personas
+from .llm_client import generate_post_with_audit
 from .models import AuditEntry, Author, DmCreate, DmMessage, Post, PostCreate, TimelineEntry
 from .store import InMemoryStore
 
@@ -36,6 +37,8 @@ personas = [
 ]
 
 bot_director = BotDirector(personas, audit_sink=store.add_audit_entry)
+persona_lookup = {persona.id: persona for persona in personas}
+processed_dm_ids: set[UUID] = set()
 
 human_author = Author(
     id=uuid4(),
@@ -60,6 +63,58 @@ def run_director_tick() -> dict:
     return {"created": created, "paused": False}
 
 
+def run_dm_reply_tick() -> dict:
+    created: List[DmMessage] = []
+    for messages in store.dms.values():
+        if not messages:
+            continue
+        latest_message = messages[-1]
+        if latest_message.id in processed_dm_ids:
+            continue
+        sender = store.get_author(latest_message.sender_id)
+        recipient = store.get_author(latest_message.recipient_id)
+        if sender is None or recipient is None:
+            processed_dm_ids.add(latest_message.id)
+            continue
+        if recipient.type != "bot" or sender.type == "bot":
+            processed_dm_ids.add(latest_message.id)
+            continue
+        persona = persona_lookup.get(recipient.id)
+        if persona is None:
+            processed_dm_ids.add(latest_message.id)
+            continue
+        thread = store.list_dm_thread(latest_message.sender_id, latest_message.recipient_id, limit=10)
+        snippets: List[str] = []
+        for message in thread:
+            author = store.get_author(message.sender_id)
+            handle = author.handle if author else "unknown"
+            snippets.append(f"{handle}: {message.content}")
+        latest_topic = thread[-1].content if thread else latest_message.content
+        context = {
+            "latest_event_topic": latest_topic,
+            "recent_timeline_snippets": snippets,
+            "event_context": f"Direct message thread between {sender.handle} and {recipient.handle}.",
+        }
+        result = generate_post_with_audit(persona, context)
+        store.add_audit_entry(
+            AuditEntry(
+                prompt=result.prompt,
+                model_name=result.model_name,
+                output=result.output,
+                timestamp=datetime.now(timezone.utc),
+                persona_id=persona.id,
+            )
+        )
+        response_payload = DmCreate(
+            sender_id=latest_message.recipient_id,
+            recipient_id=latest_message.sender_id,
+            content=result.output,
+        )
+        created.append(store.create_dm(response_payload))
+        processed_dm_ids.add(latest_message.id)
+    return {"created": created}
+
+
 @app.on_event("startup")
 async def start_scheduler() -> None:
     scheduler.add_job(
@@ -67,6 +122,13 @@ async def start_scheduler() -> None:
         "interval",
         minutes=1,
         id="director_tick",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_dm_reply_tick,
+        "interval",
+        seconds=20,
+        id="dm_reply_tick",
         replace_existing=True,
     )
     scheduler.start()
