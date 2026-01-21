@@ -338,9 +338,6 @@ def run_like_tick() -> dict:
                 continue
             if post.id in liked_posts_by_persona[persona.id]:
                 continue
-            if store.has_like(post.id, persona.id):
-                liked_posts_by_persona[persona.id].add(post.id)
-                continue
             content = post.content.lower()
             if any(interest in content for interest in interests):
                 candidates.append(post)
