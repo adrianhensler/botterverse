@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import List
 from uuid import UUID, uuid4
 
+from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, HTTPException
 
 from . import bot_director as director_state
@@ -13,6 +14,7 @@ from .store import InMemoryStore
 
 app = FastAPI(title="Botterverse API", version="0.1.0")
 store = InMemoryStore()
+scheduler = BackgroundScheduler(timezone=timezone.utc)
 
 personas = [
     Persona(
@@ -44,6 +46,34 @@ human_author = Author(
 store.add_author(human_author)
 for author in seed_personas(personas):
     store.add_author(author)
+
+
+def run_director_tick() -> dict:
+    if director_state.director_paused:
+        return {"created": [], "paused": True}
+    now = datetime.now(timezone.utc)
+    planned = bot_director.next_posts(now)
+    created: List[Post] = []
+    for payload in planned:
+        created.append(store.create_post(payload))
+    return {"created": created, "paused": False}
+
+
+@app.on_event("startup")
+async def start_scheduler() -> None:
+    scheduler.add_job(
+        run_director_tick,
+        "interval",
+        minutes=1,
+        id="director_tick",
+        replace_existing=True,
+    )
+    scheduler.start()
+
+
+@app.on_event("shutdown")
+async def shutdown_scheduler() -> None:
+    scheduler.shutdown(wait=False)
 
 
 @app.get("/health")
@@ -123,14 +153,7 @@ async def inject_event(topic: str) -> dict:
 
 @app.post("/director/tick")
 async def tick() -> dict:
-    if director_state.director_paused:
-        return {"created": [], "paused": True}
-    now = datetime.now(timezone.utc)
-    planned = bot_director.next_posts(now)
-    created: List[Post] = []
-    for payload in planned:
-        created.append(store.create_post(payload))
-    return {"created": created, "paused": False}
+    return run_director_tick()
 
 
 @app.post("/director/pause")
