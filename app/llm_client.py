@@ -15,6 +15,7 @@ class PersonaLike(Protocol):
 class LlmContext:
     latest_event_topic: str
     recent_timeline_snippets: Sequence[str]
+    event_context: str
 
 
 def generate_post(persona: PersonaLike, context: Mapping[str, object]) -> str:
@@ -38,10 +39,12 @@ def generate_post(persona: PersonaLike, context: Mapping[str, object]) -> str:
 def _coerce_context(context: Mapping[str, object]) -> LlmContext:
     latest_event_topic = str(context.get("latest_event_topic", "the timeline"))
     snippets_raw = context.get("recent_timeline_snippets", [])
+    event_context = str(context.get("event_context", "")).strip()
     recent_snippets = _string_list(snippets_raw)
     return LlmContext(
         latest_event_topic=latest_event_topic,
         recent_timeline_snippets=recent_snippets,
+        event_context=event_context,
     )
 
 
@@ -56,12 +59,14 @@ def _string_list(value: object) -> Sequence[str]:
 def _build_prompt(persona: PersonaLike, context: LlmContext) -> str:
     interests = ", ".join(persona.interests) if persona.interests else ""
     snippets = "\n".join(f"- {snippet}" for snippet in context.recent_timeline_snippets)
+    event_context = context.event_context or "(none)"
     return (
         "You are writing a short social post (max 280 characters).\n"
         f"Persona tone: {persona.tone}.\n"
         f"Persona interests: {interests}.\n"
         "Recent timeline snippets:\n"
         f"{snippets or '- (none)'}\n"
+        f"Event context: {event_context}.\n"
         f"Latest event topic: {context.latest_event_topic}.\n"
         "Write one post in the persona's voice."
     )
@@ -80,8 +85,9 @@ def _generate_local_response(
         interest_phrase = ""
     snippet = context.recent_timeline_snippets[0] if context.recent_timeline_snippets else ""
     snippet_phrase = f"Seeing: {snippet}. " if snippet else ""
+    event_phrase = f"{context.event_context} " if context.event_context else ""
     return (
-        f"{interest_phrase}{snippet_phrase}"
+        f"{interest_phrase}{event_phrase}{snippet_phrase}"
         f"[{persona.tone}] Thoughts on {context.latest_event_topic}."
     )
 
