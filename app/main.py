@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 import os
 import random
 from collections import defaultdict
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Set
 from uuid import UUID, uuid4
@@ -12,12 +14,17 @@ from fastapi import FastAPI, HTTPException
 
 from . import bot_director as director_state
 from .bot_director import BotDirector, Persona, new_event, seed_personas
+from .integrations import IntegrationEvent
+from .integrations.news import fetch_news_events
+from .integrations.sports import fetch_sports_events
+from .integrations.weather import fetch_weather_events
 from .llm_client import generate_post_with_audit
 from .models import AuditEntry, Author, DmCreate, DmMessage, Post, PostCreate, TimelineEntry
 from .store import InMemoryStore
 from .store_sqlite import SQLiteStore
 
 app = FastAPI(title="Botterverse API", version="0.1.0")
+logger = logging.getLogger("botterverse")
 store_type = os.getenv("BOTTERVERSE_STORE", "memory").lower()
 if store_type == "sqlite":
     sqlite_path = os.getenv("BOTTERVERSE_SQLITE_PATH", "data/botterverse.db")
@@ -242,9 +249,19 @@ persona_lookup = {persona.id: persona for persona in personas}
 processed_dm_ids: set[UUID] = set()
 last_like_at: Dict[UUID, datetime] = {}
 liked_posts_by_persona: Dict[UUID, Set[UUID]] = defaultdict(set)
+recent_external_ids: deque[str] = deque(maxlen=500)
+recent_external_ids_set: Set[str] = set()
 
 LIKE_COOLDOWN = timedelta(minutes=10)
 LIKE_PROBABILITY = 0.15
+EVENT_POLL_MINUTES = int(os.getenv("BOTTERVERSE_EVENT_POLL_MINUTES", "5"))
+NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
+NEWS_COUNTRY = os.getenv("NEWS_COUNTRY", "us")
+OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
+WEATHER_LOCATION = os.getenv("WEATHER_LOCATION", "New York,US")
+WEATHER_UNITS = os.getenv("WEATHER_UNITS", "metric")
+SPORTSDB_API_KEY = os.getenv("SPORTSDB_API_KEY", "")
+SPORTS_LEAGUE_ID = os.getenv("SPORTS_LEAGUE_ID", "4328")
 
 human_author = Author(
     id=uuid4(),
@@ -351,6 +368,36 @@ def run_like_tick() -> dict:
     return {"liked": liked}
 
 
+def _track_external_id(external_id: str) -> bool:
+    if external_id in recent_external_ids_set:
+        return False
+    if len(recent_external_ids) == recent_external_ids.maxlen:
+        oldest = recent_external_ids.popleft()
+        recent_external_ids_set.discard(oldest)
+    recent_external_ids.append(external_id)
+    recent_external_ids_set.add(external_id)
+    return True
+
+
+def run_event_ingest_tick() -> dict:
+    ingested: List[dict] = []
+    events: List[IntegrationEvent] = []
+    if NEWS_API_KEY:
+        events.extend(fetch_news_events(NEWS_API_KEY, country=NEWS_COUNTRY))
+    if OPENWEATHER_API_KEY and WEATHER_LOCATION:
+        events.extend(fetch_weather_events(OPENWEATHER_API_KEY, WEATHER_LOCATION, units=WEATHER_UNITS))
+    if SPORTSDB_API_KEY and SPORTS_LEAGUE_ID:
+        events.extend(fetch_sports_events(SPORTSDB_API_KEY, SPORTS_LEAGUE_ID))
+    for event in events:
+        if not _track_external_id(event.external_id):
+            continue
+        bot_director.register_event(new_event(event.topic, kind=event.kind, payload=dict(event.payload)))
+        ingested.append({"topic": event.topic, "kind": event.kind, "external_id": event.external_id})
+    if events and not ingested:
+        logger.info("No new integration events to ingest.")
+    return {"ingested": ingested}
+
+
 @app.on_event("startup")
 async def start_scheduler() -> None:
     scheduler.add_job(
@@ -372,6 +419,13 @@ async def start_scheduler() -> None:
         "interval",
         seconds=45,
         id="like_tick",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_event_ingest_tick,
+        "interval",
+        minutes=EVENT_POLL_MINUTES,
+        id="event_ingest_tick",
         replace_existing=True,
     )
     scheduler.start()
@@ -454,8 +508,8 @@ async def get_dm_thread(user_a: UUID, user_b: UUID, limit: int = 50) -> List[DmM
 
 
 @app.post("/director/events")
-async def inject_event(topic: str) -> dict:
-    event = new_event(topic)
+async def inject_event(topic: str, kind: str = "generic") -> dict:
+    event = new_event(topic, kind=kind)
     bot_director.register_event(event)
     return {"event": event}
 
