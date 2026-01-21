@@ -9,6 +9,8 @@ from uuid import UUID, uuid4
 from .llm_client import generate_post
 from .models import Author, PostCreate
 
+director_paused = False
+
 
 @dataclass(frozen=True)
 class Persona:
