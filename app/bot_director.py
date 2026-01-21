@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import json
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Dict, List, Sequence
+from typing import Dict, List, Sequence
 from uuid import UUID, uuid4
 
 from .llm_client import generate_post_with_audit
@@ -41,21 +41,22 @@ class ScheduledReaction:
     scheduled_at: datetime
 
 
+@dataclass(frozen=True)
+class PlannedPost:
+    payload: PostCreate
+    audit_entry: AuditEntry | None
+
+
 class BotDirector:
     REPLY_PROBABILITY = 0.15
     QUOTE_PROBABILITY = 0.3
 
-    def __init__(
-        self,
-        personas: List[Persona],
-        audit_sink: Callable[[AuditEntry], None] | None = None,
-    ) -> None:
+    def __init__(self, personas: List[Persona]) -> None:
         self.personas = personas
         self.events: List[BotEvent] = []
         self.last_posted_at: Dict[UUID, datetime] = {}
         self.replied_post_ids: Dict[UUID, set[UUID]] = defaultdict(set)
         self.pending_reactions: List[ScheduledReaction] = []
-        self.audit_sink = audit_sink
         self._lock = threading.RLock()
 
     def register_event(self, event: BotEvent) -> None:
@@ -63,8 +64,8 @@ class BotDirector:
             self.events.append(event)
             self._schedule_reactions(event)
 
-    def next_posts(self, now: datetime, recent_posts: Sequence[Post]) -> List[PostCreate]:
-        planned: List[PostCreate] = []
+    def next_posts(self, now: datetime, recent_posts: Sequence[Post]) -> List[PlannedPost]:
+        planned: List[PlannedPost] = []
         latest_event = self._latest_event()
         latest_topic = latest_event.topic if latest_event else "the timeline"
         recent_snippets = self._recent_timeline_snippets()
@@ -96,18 +97,22 @@ class BotDirector:
         persona: Persona,
         event: BotEvent,
         recent_snippets: Sequence[str],
-    ) -> PostCreate:
+    ) -> PlannedPost:
         context = {
             "latest_event_topic": event.topic,
             "recent_timeline_snippets": [event.topic, *recent_snippets],
             "event_context": self._event_context(event),
             "event_payload": event.payload,
         }
-        return PostCreate(
-            author_id=persona.id,
-            content=self._generate_post_content(persona, context),
-            reply_to=None,
-            quote_of=None,
+        output, audit_entry = self._generate_post_content(persona, context)
+        return PlannedPost(
+            payload=PostCreate(
+                author_id=persona.id,
+                content=output,
+                reply_to=None,
+                quote_of=None,
+            ),
+            audit_entry=audit_entry,
         )
 
     def _plan_new_post(
@@ -115,7 +120,7 @@ class BotDirector:
         persona: Persona,
         latest_topic: str,
         recent_snippets: Sequence[str],
-    ) -> PostCreate:
+    ) -> PlannedPost:
         latest_event = self._latest_event()
         context = {
             "latest_event_topic": latest_topic,
@@ -123,11 +128,15 @@ class BotDirector:
             "event_context": self._event_context(latest_event) if latest_event else "",
             "event_payload": latest_event.payload if latest_event else {},
         }
-        return PostCreate(
-            author_id=persona.id,
-            content=self._generate_post_content(persona, context),
-            reply_to=None,
-            quote_of=None,
+        output, audit_entry = self._generate_post_content(persona, context)
+        return PlannedPost(
+            payload=PostCreate(
+                author_id=persona.id,
+                content=output,
+                reply_to=None,
+                quote_of=None,
+            ),
+            audit_entry=audit_entry,
         )
 
     def _maybe_plan_reply(
@@ -136,7 +145,7 @@ class BotDirector:
         latest_topic: str,
         recent_snippets: Sequence[str],
         recent_posts: Sequence[Post],
-    ) -> PostCreate | None:
+    ) -> PlannedPost | None:
         if random.random() > self.REPLY_PROBABILITY:
             return None
         candidates = self._eligible_reply_targets(persona, recent_posts)
@@ -154,25 +163,27 @@ class BotDirector:
             "event_payload": latest_event.payload if latest_event else {},
         }
         self.replied_post_ids[persona.id].add(target.id)
-        return PostCreate(
-            author_id=persona.id,
-            content=self._generate_post_content(persona, context),
-            reply_to=None if use_quote else target.id,
-            quote_of=target.id if use_quote else None,
+        output, audit_entry = self._generate_post_content(persona, context)
+        return PlannedPost(
+            payload=PostCreate(
+                author_id=persona.id,
+                content=output,
+                reply_to=None if use_quote else target.id,
+                quote_of=target.id if use_quote else None,
+            ),
+            audit_entry=audit_entry,
         )
 
-    def _generate_post_content(self, persona: Persona, context: Dict[str, object]) -> str:
+    def _generate_post_content(self, persona: Persona, context: Dict[str, object]) -> tuple[str, AuditEntry]:
         result = generate_post_with_audit(persona, context)
-        if self.audit_sink is not None:
-            entry = AuditEntry(
-                prompt=result.prompt,
-                model_name=result.model_name,
-                output=result.output,
-                timestamp=datetime.now(timezone.utc),
-                persona_id=persona.id,
-            )
-            self.audit_sink(entry)
-        return result.output
+        entry = AuditEntry(
+            prompt=result.prompt,
+            model_name=result.model_name,
+            output=result.output,
+            timestamp=datetime.now(timezone.utc),
+            persona_id=persona.id,
+        )
+        return result.output, entry
 
     def _eligible_reply_targets(
         self,

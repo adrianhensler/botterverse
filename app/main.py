@@ -10,7 +10,7 @@ from typing import Dict, List, Set
 from uuid import UUID, uuid4
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 
 from . import bot_director as director_state
 from .bot_director import BotDirector, Persona, new_event, seed_personas
@@ -18,19 +18,14 @@ from .integrations import IntegrationEvent
 from .integrations.news import fetch_news_events
 from .integrations.sports import fetch_sports_events
 from .integrations.weather import fetch_weather_events
+from .export_utils import attach_signature, verify_signature
 from .llm_client import generate_post_with_audit
-from .models import AuditEntry, Author, DmCreate, DmMessage, Post, PostCreate, TimelineEntry
-from .store import InMemoryStore
-from .store_sqlite import SQLiteStore
+from .models import AuditEntry, AuditEntryWithPost, Author, DmCreate, DmMessage, Post, PostCreate, TimelineEntry
+from .store_factory import build_store
 
 app = FastAPI(title="Botterverse API", version="0.1.0")
 logger = logging.getLogger("botterverse")
-store_type = os.getenv("BOTTERVERSE_STORE", "memory").lower()
-if store_type == "sqlite":
-    sqlite_path = os.getenv("BOTTERVERSE_SQLITE_PATH", "data/botterverse.db")
-    store = SQLiteStore(sqlite_path)
-else:
-    store = InMemoryStore()
+store = build_store()
 scheduler = BackgroundScheduler(timezone=timezone.utc)
 
 personas = [
@@ -252,7 +247,7 @@ personas = [
     ),
 ]
 
-bot_director = BotDirector(personas, audit_sink=store.add_audit_entry)
+bot_director = BotDirector(personas)
 persona_lookup = {persona.id: persona for persona in personas}
 processed_dm_ids: set[UUID] = set()
 last_like_at: Dict[UUID, datetime] = {}
@@ -289,8 +284,20 @@ def run_director_tick() -> dict:
     recent_posts = store.list_posts(limit=50)
     planned = bot_director.next_posts(now, recent_posts)
     created: List[Post] = []
-    for payload in planned:
-        created.append(store.create_post(payload))
+    for planned_post in planned:
+        created_post = store.create_post(planned_post.payload)
+        created.append(created_post)
+        if planned_post.audit_entry is not None:
+            store.add_audit_entry(
+                AuditEntry(
+                    prompt=planned_post.audit_entry.prompt,
+                    model_name=planned_post.audit_entry.model_name,
+                    output=planned_post.audit_entry.output,
+                    timestamp=planned_post.audit_entry.timestamp,
+                    persona_id=planned_post.audit_entry.persona_id,
+                    post_id=created_post.id,
+                )
+            )
     return {"created": created, "paused": False}
 
 
@@ -327,6 +334,13 @@ def run_dm_reply_tick() -> dict:
             "event_context": f"Direct message thread between {sender.handle} and {recipient.handle}.",
         }
         result = generate_post_with_audit(persona, context)
+        response_payload = DmCreate(
+            sender_id=latest_message.recipient_id,
+            recipient_id=latest_message.sender_id,
+            content=result.output,
+        )
+        created_message = store.create_dm(response_payload)
+        created.append(created_message)
         store.add_audit_entry(
             AuditEntry(
                 prompt=result.prompt,
@@ -334,14 +348,9 @@ def run_dm_reply_tick() -> dict:
                 output=result.output,
                 timestamp=datetime.now(timezone.utc),
                 persona_id=persona.id,
+                dm_id=created_message.id,
             )
         )
-        response_payload = DmCreate(
-            sender_id=latest_message.recipient_id,
-            recipient_id=latest_message.sender_id,
-            content=result.output,
-        )
-        created.append(store.create_dm(response_payload))
         processed_dm_ids.add(latest_message.id)
     return {"created": created}
 
@@ -542,3 +551,63 @@ async def resume_director() -> dict:
 @app.get("/audit", response_model=List[AuditEntry])
 async def audit(limit: int = 200) -> List[AuditEntry]:
     return store.list_audit_entries(limit=limit)
+
+
+@app.get("/audit/linked", response_model=List[AuditEntryWithPost])
+async def audit_linked(limit: int = 200) -> List[AuditEntryWithPost]:
+    entries = store.list_audit_entries(limit=limit)
+    linked: List[AuditEntryWithPost] = []
+    for entry in entries:
+        post = store.get_post(entry.post_id) if entry.post_id else None
+        author = store.get_author(post.author_id) if post else None
+        linked.append(AuditEntryWithPost(entry=entry, post=post, author=author))
+    return linked
+
+
+@app.get("/export")
+async def export_dataset() -> dict:
+    dataset = store.export_dataset()
+    secret = os.getenv("BOTTERVERSE_EXPORT_SECRET")
+    if secret:
+        attach_signature(dataset, secret)
+    return dataset
+
+
+def _import_enabled(request: Request) -> bool:
+    if os.getenv("BOTTERVERSE_ENABLE_IMPORT", "").lower() not in {"1", "true", "yes"}:
+        return False
+    client_host = request.client.host if request.client else ""
+    return client_host in {"127.0.0.1", "::1", "localhost"}
+
+
+@app.post("/import")
+async def import_dataset(payload: dict, request: Request) -> dict:
+    if not _import_enabled(request):
+        raise HTTPException(status_code=403, detail="import disabled")
+    secret = os.getenv("BOTTERVERSE_EXPORT_SECRET")
+    if secret:
+        try:
+            verify_signature(payload, secret)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    store.import_dataset(payload)
+    return {"status": "ok"}
+
+
+@app.get("/export/timeline")
+async def export_timeline(limit: int = 200) -> List[dict]:
+    posts = sorted(store.list_posts(limit=limit), key=lambda post: (post.created_at, str(post.id)))
+    timeline = []
+    for post in posts:
+        author = store.get_author(post.author_id)
+        timeline.append(
+            {
+                "id": str(post.id),
+                "author_handle": author.handle if author else "unknown",
+                "content": post.content,
+                "created_at": post.created_at.isoformat(),
+                "reply_to": str(post.reply_to) if post.reply_to else None,
+                "quote_of": str(post.quote_of) if post.quote_of else None,
+            }
+        )
+    return timeline
