@@ -30,6 +30,13 @@ class BotEvent:
     created_at: datetime
 
 
+@dataclass(frozen=True)
+class ScheduledReaction:
+    event: BotEvent
+    persona_id: UUID
+    scheduled_at: datetime
+
+
 class BotDirector:
     REPLY_PROBABILITY = 0.15
 
@@ -38,15 +45,24 @@ class BotDirector:
         self.events: List[BotEvent] = []
         self.last_posted_at: Dict[UUID, datetime] = {}
         self.replied_post_ids: Dict[UUID, set[UUID]] = defaultdict(set)
+        self.pending_reactions: List[ScheduledReaction] = []
 
     def register_event(self, event: BotEvent) -> None:
         self.events.append(event)
+        self._schedule_reactions(event)
 
     def next_posts(self, now: datetime, recent_posts: Sequence[Post]) -> List[PostCreate]:
         planned: List[PostCreate] = []
-        latest_topic = self._latest_topic()
+        latest_event = self._latest_event()
+        latest_topic = latest_event.topic if latest_event else "the timeline"
         recent_snippets = self._recent_timeline_snippets()
+        pending_reactions = self._due_reactions(now)
         for persona in self.personas:
+            reaction = pending_reactions.get(persona.id)
+            if reaction is not None:
+                planned.append(self._plan_event_reaction(persona, reaction.event, recent_snippets))
+                self.last_posted_at[persona.id] = now
+                continue
             cadence_minutes = max(persona.cadence_minutes, 1)
             cadence_window = timedelta(minutes=cadence_minutes)
             last_posted_at = self.last_posted_at.get(persona.id)
@@ -63,15 +79,35 @@ class BotDirector:
             self.last_posted_at[persona.id] = now
         return planned
 
+    def _plan_event_reaction(
+        self,
+        persona: Persona,
+        event: BotEvent,
+        recent_snippets: Sequence[str],
+    ) -> PostCreate:
+        context = {
+            "latest_event_topic": event.topic,
+            "recent_timeline_snippets": [event.topic, *recent_snippets],
+            "event_context": self._event_context(event),
+        }
+        return PostCreate(
+            author_id=persona.id,
+            content=generate_post(persona, context),
+            reply_to=None,
+            quote_of=None,
+        )
+
     def _plan_new_post(
         self,
         persona: Persona,
         latest_topic: str,
         recent_snippets: Sequence[str],
     ) -> PostCreate:
+        latest_event = self._latest_event()
         context = {
             "latest_event_topic": latest_topic,
             "recent_timeline_snippets": recent_snippets,
+            "event_context": self._event_context(latest_event) if latest_event else "",
         }
         return PostCreate(
             author_id=persona.id,
@@ -93,10 +129,12 @@ class BotDirector:
         if not candidates:
             return None
         target = random.choice(candidates)
+        latest_event = self._latest_event()
         context = {
             "latest_event_topic": target.content or latest_topic,
             "recent_timeline_snippets": [target.content, *recent_snippets],
             "reply_to_post": target.content,
+            "event_context": self._event_context(latest_event) if latest_event else "",
         }
         self.replied_post_ids[persona.id].add(target.id)
         return PostCreate(
@@ -136,11 +174,56 @@ class BotDirector:
             return "the timeline"
         return self.events[-1].topic
 
+    def _latest_event(self) -> BotEvent | None:
+        if not self.events:
+            return None
+        return self.events[-1]
+
     def _recent_timeline_snippets(self, limit: int = 3) -> List[str]:
         if not self.events:
             return []
         recent_events = self.events[-limit:]
         return [event.topic for event in recent_events]
+
+    def _schedule_reactions(self, event: BotEvent) -> None:
+        matching_personas = [persona for persona in self.personas if self._event_matches_interests(persona, event)]
+        if not matching_personas:
+            return
+        window_minutes = random.randint(2, 10)
+        window_seconds = window_minutes * 60
+        for persona in matching_personas:
+            delay_seconds = random.uniform(0, window_seconds)
+            scheduled_at = event.created_at + timedelta(seconds=delay_seconds)
+            self.pending_reactions.append(
+                ScheduledReaction(
+                    event=event,
+                    persona_id=persona.id,
+                    scheduled_at=scheduled_at,
+                )
+            )
+
+    def _due_reactions(self, now: datetime) -> Dict[UUID, ScheduledReaction]:
+        due: Dict[UUID, ScheduledReaction] = {}
+        remaining: List[ScheduledReaction] = []
+        for reaction in self.pending_reactions:
+            if reaction.scheduled_at <= now and reaction.persona_id not in due:
+                due[reaction.persona_id] = reaction
+            else:
+                remaining.append(reaction)
+        self.pending_reactions = remaining
+        return due
+
+    def _event_matches_interests(self, persona: Persona, event: BotEvent) -> bool:
+        if not persona.interests:
+            return False
+        topic = event.topic.casefold()
+        return any(interest.casefold() in topic for interest in persona.interests)
+
+    def _event_context(self, event: BotEvent | None) -> str:
+        if event is None:
+            return ""
+        timestamp = event.created_at.astimezone(timezone.utc).isoformat()
+        return f"Event '{event.topic}' reported at {timestamp}."
 
 
 def seed_personas(personas: List[Persona]) -> List[Author]:
