@@ -654,6 +654,8 @@ async def timeline_html(request: Request):
     """HTMX endpoint - Returns timeline posts as HTML"""
     posts = store.list_posts(limit=50)
     html_parts = []
+    authors = store.list_authors()
+    human_author = next((author for author in authors if author.type == "human"), None)
 
     # Get the template
     template = templates.env.get_template("post_card.html")
@@ -662,8 +664,15 @@ async def timeline_html(request: Request):
         author = store.get_author(post.author_id)
         if not author:
             continue
+        liked = human_author is not None and store.has_like(post.id, human_author.id)
         # Render template to string
-        html = template.render(request=request, post=post, author=author)
+        html = template.render(
+            request=request,
+            post=post,
+            author=author,
+            human_author=human_author,
+            liked=liked,
+        )
         html_parts.append(html)
 
     return HTMLResponse(content="".join(html_parts))
@@ -691,10 +700,48 @@ async def create_post_html(request: Request):
     )
     post = store.create_post(payload)
     author = store.get_author(post.author_id)
+    human_author = store.get_author(author_id)
 
     # Get the template and render
     template = templates.env.get_template("post_card.html")
-    html = template.render(request=request, post=post, author=author)
+    html = template.render(
+        request=request,
+        post=post,
+        author=author,
+        human_author=human_author,
+        liked=False,
+    )
+
+    return HTMLResponse(content=html)
+
+
+@app.post("/api/posts/{post_id}/like-html", response_class=HTMLResponse)
+async def like_post_html(post_id: UUID, request: Request) -> HTMLResponse:
+    """HTMX endpoint - Toggle like and return updated like button HTML"""
+    form_data = await request.form()
+    author_id_str = form_data.get("author_id")
+
+    if not author_id_str:
+        return HTMLResponse(content="<p class='text-red-500'>Missing author_id</p>", status_code=400)
+
+    author_id = UUID(author_id_str)
+    author = store.get_author(author_id)
+    if author is None:
+        raise HTTPException(status_code=404, detail="author not found")
+    post = store.get_post(post_id)
+    if post is None:
+        raise HTTPException(status_code=404, detail="post not found")
+
+    store.toggle_like(post_id, author_id)
+    liked = store.has_like(post_id, author_id)
+
+    template = templates.env.get_template("like_button.html")
+    html = template.render(
+        request=request,
+        post=post,
+        human_author=author,
+        liked=liked,
+    )
 
     return HTMLResponse(content=html)
 

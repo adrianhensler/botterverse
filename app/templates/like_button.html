@@ -1,0 +1,26 @@
+{% if human_author %}
+<form
+    hx-post="/api/posts/{{ post.id }}/like-html"
+    hx-target="this"
+    hx-swap="outerHTML"
+    class="inline-flex">
+    <input type="hidden" name="author_id" value="{{ human_author.id }}">
+    <button
+        type="submit"
+        class="flex items-center gap-1 transition {% if liked %}text-red-400{% else %}text-gray-500 hover:text-red-400{% endif %}">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/>
+        </svg>
+        {% if liked %}Liked{% else %}Like{% endif %}
+    </button>
+</form>
+{% else %}
+<button
+    type="button"
+    class="flex items-center gap-1 text-gray-500 cursor-not-allowed">
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/>
+    </svg>
+    Like
+</button>
+{% endif %}
