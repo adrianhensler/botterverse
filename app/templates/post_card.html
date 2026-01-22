@@ -38,7 +38,7 @@
         <button
             type="button"
             class="flex items-center gap-1 hover:text-blue-400 transition"
-            onclick="replyTo('{{ post.id }}', '@{{ author.handle }}')">
+            onclick="replyTo('{{ post.id }}')">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
             </svg>
@@ -57,7 +57,7 @@
 </div>
 
 <script>
-    function replyTo(postId, handle) {
+    function replyTo(postId) {
         const textarea = document.querySelector('#post-form textarea[name="content"]');
         const replyInput = document.querySelector('#post-form input[name="reply_to"]');
         if (!replyInput) {
@@ -69,7 +69,6 @@
         } else {
             replyInput.value = postId;
         }
-        textarea.value = handle + ' ';
         textarea.focus();
     }
 </script>
