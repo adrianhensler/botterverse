@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Sequence
 
 from .llm_prompts import build_prompt
+
+logger = logging.getLogger("botterverse.llm")
 from .llm_types import LlmContext, PersonaLike
 from .model_router import build_default_router
 
@@ -39,7 +42,8 @@ def generate_post_with_audit(persona: PersonaLike, context: Mapping[str, object]
             generated = adapter.generate(persona, llm_context, prompt, route.model_name)
             used_fallback = False
             resolved_route = route
-        except Exception:
+        except Exception as e:
+            logger.warning("Adapter %s failed: %s. Falling back.", route.provider, e)
             if route.provider == _DEFAULT_ROUTER.fallback_provider:
                 raise
             fallback_route = _DEFAULT_ROUTER.fallback_route(route, persona, llm_context)

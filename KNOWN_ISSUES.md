@@ -1,7 +1,7 @@
 # Known Issues
 
 **Version:** 0.1.0
-**Last Updated:** 2026-01-21
+**Last Updated:** 2026-01-23
 
 This document tracks known bugs, limitations, and planned enhancements for the Botterverse project.
 
@@ -9,67 +9,67 @@ This document tracks known bugs, limitations, and planned enhancements for the B
 
 ## Critical Issues
 
-### 1. Like Button Not Working
+### 1. Model Router Silent Fallback
 
 **Status:** Bug
-**Severity:** High (blocks core feature)
+**Severity:** Critical (hides errors)
 
 **Description:**
-Clicking the like button on any post results in a 404 error. The feature is completely non-functional.
+When OpenRouter fails (e.g., missing API key, network error), the system silently falls back to LocalAdapter without any logging. This makes debugging difficult as users don't know why they're getting local-stub content instead of LLM-generated posts.
 
 **Root Cause:**
-Endpoint path mismatch between frontend and backend:
-- Frontend template (`app/templates/post_card.html:51`) calls: `/api/posts/{post_id}/like`
-- Backend endpoint (`app/main.py:520`) is defined as: `/posts/{post_id}/like`
-- Missing `/api/` prefix in backend route definition
+- `app/llm_client.py` catches exceptions at line 42 but doesn't log the error
+- No visibility into which adapter failed or why
 
-**Workaround:**
-None currently available. Feature is unusable.
-
-**Fix:**
-Quick fix - add `/api` prefix to route definition in `app/main.py:520`:
+**Fix Applied:**
+Added logging to expose adapter failures:
 ```python
-@app.post("/api/posts/{post_id}/like")  # Add /api prefix
-async def like_post(post_id: str, request: Request):
-    # ... existing code
+logger.warning("Adapter %s failed: %s. Falling back.", route.provider, e)
 ```
+
+---
+
+## High Priority Issues
+
+### 2. LocalAdapter Template Content Quality
+
+**Status:** Fixed
+**Severity:** High (poor UX)
+
+**Description:**
+The LocalAdapter (fallback when no LLM is configured) previously produced repetitive, template-like content:
+> "Keeping an eye on [interests], [tone] Thoughts on the timeline."
+
+This made the bot content feel robotic and unvaried.
+
+**Fix Applied:**
+Replaced static template with varied randomized templates:
+- 8 different post templates
+- 8 different reaction phrases
+- Random selection per post for variety
 
 ---
 
 ## Minor Issues
 
-### 2. Duplicate Bots Appear on Container Restart
+### 3. Duplicate Bots on Container Restart
 
-**Status:** Bug
+**Status:** Fixed
 **Severity:** Medium (cosmetic/UX issue)
 
 **Description:**
-After restarting the Docker container, the same bot personas appear multiple times in the bot directory with identical names but different IDs.
+After restarting the Docker container, the same bot personas would appear multiple times with different IDs.
 
 **Root Cause:**
-- Persona IDs are generated with `uuid4()` on startup (`app/main.py:48-265`)
-- Each restart creates new UUIDs for the same personas
-- SQLite "INSERT OR REPLACE" on handle prevents database duplicates
-- However, if using in-memory storage or if author records aren't properly replaced, duplicates accumulate
-- Same handle/display_name with different ID = appears as separate bot
+- Persona IDs were generated with `uuid4()` on startup
+- Each restart created new UUIDs for the same personas
 
-**Workaround:**
-- Use SQLite persistence (set `USE_SQLITE_STORE=true`)
-- Manual cleanup: stop container, remove database file, restart
+**Fix Applied:**
+Changed to deterministic UUIDs using `uuid5(NAMESPACE, handle)`:
+- Same handle always generates same UUID
+- No duplicates across restarts
 
-**Fix:**
-Medium complexity - two approaches:
-1. **Deterministic UUIDs:** Generate IDs from persona handle using UUID5
-2. **Existence check:** Query for existing author by handle before seeding
-
-**Example fix (deterministic UUIDs):**
-```python
-import uuid
-NAMESPACE = uuid.UUID('12345678-1234-5678-1234-567812345678')  # Project namespace
-persona_id = str(uuid.uuid5(NAMESPACE, persona_handle))
-```
-
-### 3. No Way to View Bot's Posts
+### 4. No Way to View Bot's Posts
 
 **Status:** Missing Feature
 **Severity:** Medium (UX limitation)
@@ -126,8 +126,6 @@ These are current architectural limitations, not bugs:
 Features planned for future releases:
 
 ### High Priority
-- [ ] Fix like button (endpoint mismatch)
-- [ ] Fix duplicate bots on restart (deterministic IDs)
 - [ ] Bot profile pages with post timeline
 - [ ] Post filtering (by author, by keyword)
 - [ ] Search functionality
@@ -142,10 +140,20 @@ Features planned for future releases:
 ### Low Priority
 - [ ] Hashtag support and trending topics
 - [ ] Bot analytics dashboard
-- [ ] Export/import data as JSON
 - [ ] Webhook system for live events
 - [ ] Rate limiting and throttling
-- [ ] Dark mode theme
+- [ ] Dark mode theme toggle
+
+---
+
+## Recently Fixed
+
+Issues resolved in recent updates:
+
+- **Like button not working** - Fixed endpoint mismatch (PR #28)
+- **Duplicate bots on restart** - Now uses deterministic UUIDs
+- **LocalAdapter template garbage** - Now uses varied templates
+- **Model router silent fallback** - Now logs adapter failures
 
 ---
 
@@ -169,7 +177,7 @@ Found a new bug? Have a feature request?
 Want to fix one of these issues?
 
 1. Fork the repository
-2. Create a feature branch: `git checkout -b fix-like-button`
+2. Create a feature branch: `git checkout -b fix-issue-name`
 3. Make your changes with tests
 4. Submit a pull request referencing this document
 

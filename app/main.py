@@ -8,7 +8,10 @@ from collections import defaultdict
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Set
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
+
+# Deterministic namespace for generating consistent bot UUIDs across restarts
+BOTTERVERSE_NAMESPACE = UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, HTTPException, Request
@@ -48,7 +51,7 @@ templates = Jinja2Templates(directory="app/templates")
 
 personas = [
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "newswire"),
         handle="newswire",
         display_name="Newswire",
         tone="urgent",
@@ -56,7 +59,7 @@ personas = [
         cadence_minutes=15,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "weatherguy"),
         handle="weatherguy",
         display_name="Weather Bot",
         tone="cheerful",
@@ -64,7 +67,7 @@ personas = [
         cadence_minutes=30,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "stadiumpulse"),
         handle="stadiumpulse",
         display_name="Stadium Pulse",
         tone="hyped",
@@ -72,7 +75,7 @@ personas = [
         cadence_minutes=20,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "statline"),
         handle="statline",
         display_name="Stat Line Analyst",
         tone="analytical",
@@ -80,7 +83,7 @@ personas = [
         cadence_minutes=45,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "marketminute"),
         handle="marketminute",
         display_name="Market Minute",
         tone="measured",
@@ -88,7 +91,7 @@ personas = [
         cadence_minutes=25,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "civicwatch"),
         handle="civicwatch",
         display_name="Civic Watch",
         tone="serious",
@@ -96,7 +99,7 @@ personas = [
         cadence_minutes=60,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "techbrief"),
         handle="techbrief",
         display_name="Tech Brief",
         tone="curious",
@@ -104,7 +107,7 @@ personas = [
         cadence_minutes=35,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "culturepulse"),
         handle="culturepulse",
         display_name="Culture Pulse",
         tone="playful",
@@ -112,7 +115,7 @@ personas = [
         cadence_minutes=50,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "foodtrail"),
         handle="foodtrail",
         display_name="Food Trail",
         tone="warm",
@@ -120,7 +123,7 @@ personas = [
         cadence_minutes=55,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "opinionforge"),
         handle="opinionforge",
         display_name="Opinion Forge",
         tone="provocative",
@@ -128,7 +131,7 @@ personas = [
         cadence_minutes=40,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "commutecheck"),
         handle="commutecheck",
         display_name="Commute Check",
         tone="practical",
@@ -136,7 +139,7 @@ personas = [
         cadence_minutes=12,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "greenledger"),
         handle="greenledger",
         display_name="Green Ledger",
         tone="optimistic",
@@ -144,7 +147,7 @@ personas = [
         cadence_minutes=70,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "sciencebeam"),
         handle="sciencebeam",
         display_name="Science Beam",
         tone="inquisitive",
@@ -152,7 +155,7 @@ personas = [
         cadence_minutes=65,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "healthdesk"),
         handle="healthdesk",
         display_name="Health Desk",
         tone="reassuring",
@@ -160,7 +163,7 @@ personas = [
         cadence_minutes=80,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "bizsignal"),
         handle="bizsignal",
         display_name="Biz Signal",
         tone="concise",
@@ -168,7 +171,7 @@ personas = [
         cadence_minutes=28,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "travelgrid"),
         handle="travelgrid",
         display_name="Travel Grid",
         tone="adventurous",
@@ -176,7 +179,7 @@ personas = [
         cadence_minutes=90,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "eduwatch"),
         handle="eduwatch",
         display_name="Edu Watch",
         tone="thoughtful",
@@ -184,7 +187,7 @@ personas = [
         cadence_minutes=75,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "citybeats"),
         handle="citybeats",
         display_name="City Beats",
         tone="lively",
@@ -192,7 +195,7 @@ personas = [
         cadence_minutes=22,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "courtroomcap"),
         handle="courtroomcap",
         display_name="Courtroom Cap",
         tone="formal",
@@ -200,7 +203,7 @@ personas = [
         cadence_minutes=95,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "gaminggrid"),
         handle="gaminggrid",
         display_name="Gaming Grid",
         tone="energetic",
@@ -208,7 +211,7 @@ personas = [
         cadence_minutes=26,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "artisthub"),
         handle="artisthub",
         display_name="Artist Hub",
         tone="reflective",
@@ -216,7 +219,7 @@ personas = [
         cadence_minutes=85,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "farmreport"),
         handle="farmreport",
         display_name="Farm Report",
         tone="grounded",
@@ -224,7 +227,7 @@ personas = [
         cadence_minutes=100,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "globaldesk"),
         handle="globaldesk",
         display_name="Global Desk",
         tone="steady",
@@ -232,7 +235,7 @@ personas = [
         cadence_minutes=18,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "pollwatch"),
         handle="pollwatch",
         display_name="Poll Watch",
         tone="skeptical",
@@ -240,7 +243,7 @@ personas = [
         cadence_minutes=48,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "moneycoach"),
         handle="moneycoach",
         display_name="Money Coach",
         tone="encouraging",
@@ -248,7 +251,7 @@ personas = [
         cadence_minutes=110,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "parentingpost"),
         handle="parentingpost",
         display_name="Parenting Post",
         tone="supportive",
@@ -256,7 +259,7 @@ personas = [
         cadence_minutes=105,
     ),
     Persona(
-        id=uuid4(),
+        id=uuid5(BOTTERVERSE_NAMESPACE, "fake_liar"),
         handle="fake_liar",
         display_name="Fake Liar",
         tone="boastful",
@@ -285,7 +288,7 @@ SPORTSDB_API_KEY = os.getenv("SPORTSDB_API_KEY", "")
 SPORTS_LEAGUE_ID = os.getenv("SPORTS_LEAGUE_ID", "4328")
 
 human_author = Author(
-    id=uuid4(),
+    id=uuid5(BOTTERVERSE_NAMESPACE, "you"),
     handle="you",
     display_name="You",
     type="human",
