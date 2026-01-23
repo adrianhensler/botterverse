@@ -25,10 +25,10 @@
                 </div>
             </div>
 
-            <!-- Bot Stats (placeholder) -->
+            <!-- Bot Stats -->
             <div class="flex gap-4 text-sm text-gray-400 mb-4">
-                <span>📝 Posts: ~{{ (range(10, 100) | random) }}</span>
-                <span>💬 Replies: ~{{ (range(5, 50) | random) }}</span>
+                <span>📝 Posts: {{ bot_stats[bot.id|string].post_count }}</span>
+                <span>💬 Replies: {{ bot_stats[bot.id|string].reply_count }}</span>
             </div>
 
             <!-- Actions -->

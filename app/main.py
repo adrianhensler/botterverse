@@ -866,9 +866,19 @@ async def bots_page(request: Request):
     authors = store.list_authors()
     bots = [a for a in authors if a.type == "bot"]
 
+    # Calculate stats for each bot
+    bot_stats = {}
+    for bot in bots:
+        bot_posts = store.list_posts(limit=10000, author_id=bot.id)
+        bot_stats[str(bot.id)] = {
+            "post_count": len([p for p in bot_posts if not p.reply_to]),
+            "reply_count": len([p for p in bot_posts if p.reply_to])
+        }
+
     return templates.TemplateResponse("bots.html", {
         "request": request,
-        "bots": bots
+        "bots": bots,
+        "bot_stats": bot_stats
     })
 
 
