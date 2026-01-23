@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import ValidationError
 
 from . import bot_director as director_state
 from .bot_director import BotDirector, Persona, new_event, seed_personas
@@ -634,6 +635,10 @@ async def export_timeline(limit: int = 200) -> List[dict]:
 # HTML/Web GUI Routes
 # ============================================================================
 
+def _htmx_error(message: str, status_code: int = 400) -> HTMLResponse:
+    return HTMLResponse(content=f"<p class='text-red-500'>{message}</p>", status_code=status_code)
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     """Homepage - Timeline view"""
@@ -687,17 +692,25 @@ async def create_post_html(request: Request):
     reply_to_str = form_data.get("reply_to")
 
     # Handle empty strings
-    author_id = UUID(author_id_str) if author_id_str else None
-    reply_to = UUID(reply_to_str) if reply_to_str and reply_to_str.strip() else None
+    if not author_id_str or not content:
+        return _htmx_error("Missing required fields", status_code=400)
 
-    if not author_id or not content:
-        return HTMLResponse(content="<p class='text-red-500'>Missing required fields</p>", status_code=400)
+    try:
+        author_id = UUID(author_id_str)
+        reply_to = UUID(reply_to_str) if reply_to_str and reply_to_str.strip() else None
+        payload = PostCreate(
+            author_id=author_id,
+            content=content,
+            reply_to=reply_to,
+        )
+    except (ValueError, ValidationError):
+        return _htmx_error("Invalid post data", status_code=400)
 
-    payload = PostCreate(
-        author_id=author_id,
-        content=content,
-        reply_to=reply_to
-    )
+    if store.get_author(payload.author_id) is None:
+        return _htmx_error("Author not found", status_code=404)
+    if payload.reply_to and not store.has_post(payload.reply_to):
+        return _htmx_error("Post not found", status_code=404)
+
     post = store.create_post(payload)
     author = store.get_author(post.author_id)
     human_author = store.get_author(author_id)
@@ -798,15 +811,27 @@ async def dms_html(request: Request, bot_id: str):
 async def send_dm_html(request: Request):
     """HTMX endpoint - Send DM and return message HTML"""
     form_data = await request.form()
-    sender_id = UUID(form_data.get("sender_id"))
-    recipient_id = UUID(form_data.get("recipient_id"))
     content = form_data.get("content")
 
-    payload = DmCreate(
-        sender_id=sender_id,
-        recipient_id=recipient_id,
-        content=content
-    )
+    if not content:
+        return _htmx_error("Missing required fields", status_code=400)
+
+    try:
+        sender_id = UUID(form_data.get("sender_id"))
+        recipient_id = UUID(form_data.get("recipient_id"))
+        payload = DmCreate(
+            sender_id=sender_id,
+            recipient_id=recipient_id,
+            content=content,
+        )
+    except (TypeError, ValueError, ValidationError):
+        return _htmx_error("Invalid message data", status_code=400)
+
+    if store.get_author(payload.sender_id) is None:
+        return _htmx_error("Sender not found", status_code=404)
+    if store.get_author(payload.recipient_id) is None:
+        return _htmx_error("Recipient not found", status_code=404)
+
     message = store.create_dm(payload)
 
     authors = store.list_authors()
