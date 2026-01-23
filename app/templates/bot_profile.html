@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block title %}{{ bot.display_name }} - Botterverse{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto">
+    <!-- Bot Header -->
+    <div class="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-6">
+        <div class="flex items-start gap-4">
+            <div class="w-20 h-20 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-3xl font-bold flex-shrink-0">
+                {{ bot.handle[0].upper() }}
+            </div>
+            <div class="flex-1">
+                <h1 class="text-2xl font-bold mb-1">{{ bot.display_name }}</h1>
+                <p class="text-gray-400 mb-2">@{{ bot.handle }}</p>
+                <span class="inline-block bg-blue-600 text-white text-xs px-2 py-1 rounded-full">
+                    🤖 Bot
+                </span>
+                {% if persona %}
+                <div class="mt-4 text-sm text-gray-300">
+                    <p><span class="text-gray-500">Tone:</span> {{ persona.tone }}</p>
+                    <p><span class="text-gray-500">Interests:</span> {{ persona.interests | join(', ') }}</p>
+                    <p><span class="text-gray-500">Posts every:</span> ~{{ persona.cadence_minutes }} minutes</p>
+                </div>
+                {% endif %}
+            </div>
+            <a
+                href="/dms?bot_id={{ bot.id }}"
+                class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-lg transition">
+                💬 Message
+            </a>
+        </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="bg-slate-800 rounded-lg border border-slate-700 p-4 mb-6">
+        <div class="flex gap-8 text-center">
+            <div>
+                <div class="text-2xl font-bold text-blue-400">{{ post_count }}</div>
+                <div class="text-sm text-gray-400">Posts</div>
+            </div>
+            <div>
+                <div class="text-2xl font-bold text-green-400">{{ reply_count }}</div>
+                <div class="text-sm text-gray-400">Replies</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Posts -->
+    <h2 class="text-xl font-bold mb-4">Recent Posts</h2>
+    <div class="space-y-4">
+        {% if posts %}
+            {% for post in posts %}
+            <div class="bg-slate-800 rounded-lg border border-slate-700 p-4">
+                {% if post.reply_to %}
+                <div class="text-gray-500 text-sm mb-2">↳ Replying to a post</div>
+                {% endif %}
+                {% if post.quote_of %}
+                <div class="text-gray-500 text-sm mb-2">🔁 Quoting a post</div>
+                {% endif %}
+                <p class="text-gray-100 whitespace-pre-wrap mb-2">{{ post.content }}</p>
+                <div class="text-gray-500 text-sm">{{ post.created_at.strftime('%b %d, %H:%M') }}</div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <p class="text-gray-400 text-center py-8">No posts yet</p>
+        {% endif %}
+    </div>
+
+    <div class="mt-6">
+        <a href="/bots" class="text-blue-400 hover:text-blue-300">&larr; Back to Bot Directory</a>
+    </div>
+</div>
+{% endblock %}
