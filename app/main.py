@@ -693,6 +693,7 @@ async def create_post_html(request: Request):
     author_id_str = form_data.get("author_id")
     content = form_data.get("content")
     reply_to_str = form_data.get("reply_to")
+    quote_of_str = form_data.get("quote_of")
 
     # Handle empty strings
     if not author_id_str or not content:
@@ -701,10 +702,12 @@ async def create_post_html(request: Request):
     try:
         author_id = UUID(author_id_str)
         reply_to = UUID(reply_to_str) if reply_to_str and reply_to_str.strip() else None
+        quote_of = UUID(quote_of_str) if quote_of_str and quote_of_str.strip() else None
         payload = PostCreate(
             author_id=author_id,
             content=content,
             reply_to=reply_to,
+            quote_of=quote_of,
         )
     except (ValueError, ValidationError):
         return _htmx_error("Invalid post data", status_code=400)
@@ -712,7 +715,9 @@ async def create_post_html(request: Request):
     if store.get_author(payload.author_id) is None:
         return _htmx_error("Author not found", status_code=404)
     if payload.reply_to and not store.has_post(payload.reply_to):
-        return _htmx_error("Post not found", status_code=404)
+        return _htmx_error("Reply target post not found", status_code=404)
+    if payload.quote_of and not store.has_post(payload.quote_of):
+        return _htmx_error("Quote target post not found", status_code=404)
 
     post = store.create_post(payload)
     author = store.get_author(post.author_id)
@@ -861,15 +866,58 @@ async def bots_page(request: Request):
     authors = store.list_authors()
     bots = [a for a in authors if a.type == "bot"]
 
+    # Calculate stats for each bot
+    bot_stats = {}
+    for bot in bots:
+        bot_posts = store.list_posts(limit=10000, author_id=bot.id)
+        bot_stats[str(bot.id)] = {
+            "post_count": len([p for p in bot_posts if not p.reply_to]),
+            "reply_count": len([p for p in bot_posts if p.reply_to])
+        }
+
     return templates.TemplateResponse("bots.html", {
         "request": request,
-        "bots": bots
+        "bots": bots,
+        "bot_stats": bot_stats
     })
 
 
-@app.post("/api/inject-event")
-async def inject_event_html(topic: str, kind: str = "generic"):
-    """Inject event and trigger bot reactions"""
+@app.get("/bots/{bot_id}", response_class=HTMLResponse)
+async def bot_profile_page(request: Request, bot_id: UUID):
+    """Bot profile page with their posts"""
+    bot = store.get_author(bot_id)
+    if not bot or bot.type != "bot":
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    # Get persona info
+    persona = persona_lookup.get(bot_id)
+
+    # Get bot's posts (query by author_id to avoid missing older posts)
+    bot_posts = store.list_posts(limit=50, author_id=bot_id)
+
+    # Count stats across ALL bot posts (not just the 50 displayed)
+    all_bot_posts = store.list_posts(limit=10000, author_id=bot_id)
+    post_count = len([p for p in all_bot_posts if not p.reply_to])
+    reply_count = len([p for p in all_bot_posts if p.reply_to])
+
+    return templates.TemplateResponse("bot_profile.html", {
+        "request": request,
+        "bot": bot,
+        "persona": persona,
+        "posts": bot_posts,
+        "post_count": post_count,
+        "reply_count": reply_count,
+    })
+
+
+@app.post("/api/inject-event", response_class=HTMLResponse)
+async def inject_event_html(request: Request):
+    """Inject event and trigger bot reactions, return HTML posts"""
+    form_data = await request.form()
+    topic = form_data.get("topic", "")
+    kind = form_data.get("kind", "generic")
+    if not topic:
+        return HTMLResponse(content="<p class='text-red-500'>Topic is required</p>", status_code=400)
     event = new_event(topic, kind=kind)
     bot_director.register_event(event)
 
@@ -878,8 +926,10 @@ async def inject_event_html(topic: str, kind: str = "generic"):
     recent_posts = store.list_posts(limit=50)
     planned = bot_director.next_posts(now, recent_posts)
 
+    created_posts: List[Post] = []
     for planned_post in planned[:5]:  # Limit to 5 immediate reactions
         created_post = store.create_post(planned_post.payload)
+        created_posts.append(created_post)
         if planned_post.audit_entry:
             store.add_audit_entry(
                 AuditEntry(
@@ -892,4 +942,21 @@ async def inject_event_html(topic: str, kind: str = "generic"):
                 )
             )
 
-    return {"status": "ok", "event": event, "reactions": len(planned)}
+    # Return HTML for the created posts
+    authors = store.list_authors()
+    human_author = next((a for a in authors if a.type == "human"), None)
+    template = templates.env.get_template("post_card.html")
+    html_parts = []
+    for post in created_posts:
+        author = store.get_author(post.author_id)
+        if author:
+            html = template.render(
+                request=request,
+                post=post,
+                author=author,
+                human_author=human_author,
+                liked=False,
+            )
+            html_parts.append(html)
+
+    return HTMLResponse(content="".join(html_parts))

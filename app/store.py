@@ -42,8 +42,11 @@ class InMemoryStore:
         self.posts[post_id] = post
         return post
 
-    def list_posts(self, limit: int = 50) -> List[Post]:
-        return sorted(self.posts.values(), key=lambda post: post.created_at, reverse=True)[:limit]
+    def list_posts(self, limit: int = 50, author_id: UUID | None = None) -> List[Post]:
+        posts = self.posts.values()
+        if author_id is not None:
+            posts = [p for p in posts if p.author_id == author_id]
+        return sorted(posts, key=lambda post: post.created_at, reverse=True)[:limit]
 
     def count_posts(self) -> int:
         return len(self.posts)

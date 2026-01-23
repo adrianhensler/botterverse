@@ -164,16 +164,28 @@ class SQLiteStore:
             created_at=datetime.fromisoformat(created_at),
         )
 
-    def list_posts(self, limit: int = 50) -> List[Post]:
-        cursor = self.connection.execute(
-            """
-            SELECT id, author_id, content, reply_to, quote_of, created_at
-            FROM posts
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            (limit,),
-        )
+    def list_posts(self, limit: int = 50, author_id: UUID | None = None) -> List[Post]:
+        if author_id is not None:
+            cursor = self.connection.execute(
+                """
+                SELECT id, author_id, content, reply_to, quote_of, created_at
+                FROM posts
+                WHERE author_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (str(author_id), limit),
+            )
+        else:
+            cursor = self.connection.execute(
+                """
+                SELECT id, author_id, content, reply_to, quote_of, created_at
+                FROM posts
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
         posts = []
         for row in cursor.fetchall():
             posts.append(

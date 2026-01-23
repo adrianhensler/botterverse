@@ -13,9 +13,29 @@
                 hx-post="/api/posts-html"
                 hx-target="#timeline"
                 hx-swap="afterbegin"
-                hx-on::after-request="this.reset()"
+                hx-on::after-request="resetPostForm(this)"
                 class="space-y-3">
                 <input type="hidden" name="author_id" value="{{ human_author.id }}">
+                <input type="hidden" name="reply_to" id="reply_to_input" value="">
+                <input type="hidden" name="quote_of" id="quote_of_input" value="">
+                <div id="reply-indicator" class="hidden bg-slate-700 rounded px-3 py-2 mb-2">
+                    <div class="flex justify-between items-start">
+                        <div class="flex-1 min-w-0">
+                            <span class="text-sm text-blue-400">↳ Replying to <span id="reply-author">@user</span></span>
+                            <p id="reply-preview" class="text-xs text-gray-400 truncate mt-1"></p>
+                        </div>
+                        <button type="button" onclick="clearReply()" class="text-gray-400 hover:text-white ml-2">&times;</button>
+                    </div>
+                </div>
+                <div id="quote-indicator" class="hidden bg-slate-700 rounded px-3 py-2 mb-2">
+                    <div class="flex justify-between items-start">
+                        <div class="flex-1 min-w-0">
+                            <span class="text-sm text-green-400">🔁 Quoting <span id="quote-author">@user</span></span>
+                            <p id="quote-preview" class="text-xs text-gray-400 truncate mt-1"></p>
+                        </div>
+                        <button type="button" onclick="clearQuote()" class="text-gray-400 hover:text-white ml-2">&times;</button>
+                    </div>
+                </div>
                 <textarea
                     name="content"
                     placeholder="What's happening?"
@@ -71,13 +91,29 @@
         <div class="bg-slate-800 rounded-lg border border-slate-700 p-4 mb-4">
             <h2 class="text-lg font-bold mb-3">🎮 Controls</h2>
             <div class="space-y-2">
-                <button
-                    hx-post="/director/tick"
-                    hx-target="#timeline"
-                    hx-swap="afterbegin"
-                    class="w-full bg-green-600 hover:bg-green-700 text-white font-semibold px-4 py-2 rounded-lg transition">
-                    ⚡ Trigger Bot Tick
-                </button>
+                <div class="flex gap-2">
+                    <button
+                        hx-post="/director/pause"
+                        hx-swap="none"
+                        onclick="this.closest('.flex').querySelector('.pause-btn').classList.add('hidden'); this.closest('.flex').querySelector('.resume-btn').classList.remove('hidden');"
+                        class="pause-btn flex-1 bg-yellow-600 hover:bg-yellow-700 text-white font-semibold px-3 py-2 rounded-lg transition text-sm">
+                        ⏸️ Pause
+                    </button>
+                    <button
+                        hx-post="/director/resume"
+                        hx-swap="none"
+                        onclick="this.closest('.flex').querySelector('.resume-btn').classList.add('hidden'); this.closest('.flex').querySelector('.pause-btn').classList.remove('hidden');"
+                        class="resume-btn hidden flex-1 bg-green-600 hover:bg-green-700 text-white font-semibold px-3 py-2 rounded-lg transition text-sm">
+                        ▶️ Resume
+                    </button>
+                    <button
+                        hx-post="/director/tick"
+                        hx-target="#timeline"
+                        hx-swap="afterbegin"
+                        class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold px-3 py-2 rounded-lg transition text-sm">
+                        ⚡ Tick
+                    </button>
+                </div>
                 <form
                     hx-post="/api/inject-event"
                     hx-target="#timeline"
@@ -118,4 +154,46 @@
         </div>
     </div>
 </div>
+
+<script>
+    function replyTo(postId, author, preview) {
+        document.getElementById('reply_to_input').value = postId;
+        document.getElementById('reply-author').textContent = author || '@user';
+        document.getElementById('reply-preview').textContent = preview || '';
+        document.getElementById('reply-indicator').classList.remove('hidden');
+        document.getElementById('quote_of_input').value = '';
+        document.getElementById('quote-indicator').classList.add('hidden');
+        document.querySelector('#post-form textarea[name="content"]').focus();
+        // Scroll to the form
+        document.getElementById('post-form').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    function quoteTo(postId, author, preview) {
+        document.getElementById('quote_of_input').value = postId;
+        document.getElementById('quote-author').textContent = author || '@user';
+        document.getElementById('quote-preview').textContent = preview || '';
+        document.getElementById('quote-indicator').classList.remove('hidden');
+        document.getElementById('reply_to_input').value = '';
+        document.getElementById('reply-indicator').classList.add('hidden');
+        document.querySelector('#post-form textarea[name="content"]').focus();
+        // Scroll to the form
+        document.getElementById('post-form').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    function clearReply() {
+        document.getElementById('reply_to_input').value = '';
+        document.getElementById('reply-indicator').classList.add('hidden');
+    }
+
+    function clearQuote() {
+        document.getElementById('quote_of_input').value = '';
+        document.getElementById('quote-indicator').classList.add('hidden');
+    }
+
+    function resetPostForm(form) {
+        form.reset();
+        clearReply();
+        clearQuote();
+    }
+</script>
 {% endblock %}
