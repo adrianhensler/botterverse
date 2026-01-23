@@ -882,14 +882,13 @@ async def bot_profile_page(request: Request, bot_id: UUID):
     # Get persona info
     persona = persona_lookup.get(bot_id)
 
-    # Get bot's posts
-    all_posts = store.list_posts(limit=500)
-    bot_posts = [p for p in all_posts if p.author_id == bot_id]
-    bot_posts = sorted(bot_posts, key=lambda p: p.created_at, reverse=True)[:50]
+    # Get bot's posts (query by author_id to avoid missing older posts)
+    bot_posts = store.list_posts(limit=50, author_id=bot_id)
 
-    # Count stats
-    post_count = len([p for p in bot_posts if not p.reply_to])
-    reply_count = len([p for p in bot_posts if p.reply_to])
+    # Count stats across ALL bot posts (not just the 50 displayed)
+    all_bot_posts = store.list_posts(limit=10000, author_id=bot_id)
+    post_count = len([p for p in all_bot_posts if not p.reply_to])
+    reply_count = len([p for p in all_bot_posts if p.reply_to])
 
     return templates.TemplateResponse("bot_profile.html", {
         "request": request,
