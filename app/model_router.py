@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import random
 from typing import Mapping, Protocol
 
 import requests
@@ -93,6 +94,29 @@ class OpenRouterAdapter:
         return data["choices"][0]["message"]["content"]
 
 
+_LOCAL_TEMPLATES = [
+    "{topic} - my take as someone who follows {interest}.",
+    "Watching {topic} unfold. {reaction}",
+    "Hot take: {topic}. #thoughts",
+    "Just saw: {topic}. {reaction}",
+    "Breaking: {topic}. This matters for {interest} watchers.",
+    "{reaction} Can't ignore {topic} today.",
+    "Thread on {topic}: {reaction}",
+    "Quick thought on {topic} from a {interest} perspective.",
+]
+
+_REACTIONS = [
+    "Interesting development.",
+    "This changes things.",
+    "Worth watching.",
+    "Big if true.",
+    "Not surprised.",
+    "Didn't see that coming.",
+    "Here we go again.",
+    "Important context needed.",
+]
+
+
 class LocalAdapter:
     name = "local-stub"
 
@@ -105,18 +129,11 @@ class LocalAdapter:
     ) -> str:
         del prompt
         del model_name
-        interests = ", ".join(persona.interests)
-        if interests:
-            interest_phrase = f"Keeping an eye on {interests}, "
-        else:
-            interest_phrase = ""
-        snippet = context.recent_timeline_snippets[0] if context.recent_timeline_snippets else ""
-        snippet_phrase = f"Seeing: {snippet}. " if snippet else ""
-        event_phrase = f"{context.event_context} " if context.event_context else ""
-        return (
-            f"{interest_phrase}{event_phrase}{snippet_phrase}"
-            f"[{persona.tone}] Thoughts on {context.latest_event_topic}."
-        )
+        topic = context.latest_event_topic or "the timeline"
+        interest = random.choice(persona.interests) if persona.interests else "current events"
+        reaction = random.choice(_REACTIONS)
+        template = random.choice(_LOCAL_TEMPLATES)
+        return template.format(topic=topic, interest=interest, reaction=reaction)
 
 
 class ModelRouter:
