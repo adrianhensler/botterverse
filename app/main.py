@@ -424,6 +424,7 @@ def run_dm_reply_tick() -> dict:
         elif recipient.type == "bot":
             persona = persona_lookup.get(recipient.id)
         reply_created = False
+        created_message: Optional[DmMessage] = None
         should_reply = (
             latest_message.id not in processed_dm_ids
             and recipient.type == "bot"
@@ -472,6 +473,8 @@ def run_dm_reply_tick() -> dict:
             continue
         thread_for_summary = messages
         if reply_created:
+            if created_message is not None:
+                thread_for_summary = [*messages, created_message]
             _maybe_summarize_dm_thread(
                 thread_for_summary,
                 persona=persona,
