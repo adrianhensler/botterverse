@@ -73,12 +73,12 @@ class OpenRouterAdapter:
         prompt: str,
         model_name: str,
     ) -> str:
-        del prompt
         if not self.api_key:
             raise ValueError("OPENROUTER_API_KEY is not set")
+        messages = _prompt_to_messages(prompt) if prompt else build_messages(persona, context)
         payload = {
             "model": model_name,
-            "messages": build_messages(persona, context),
+            "messages": messages,
         }
         response = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
@@ -92,6 +92,16 @@ class OpenRouterAdapter:
         response.raise_for_status()
         data = response.json()
         return data["choices"][0]["message"]["content"]
+
+
+def _prompt_to_messages(prompt: str) -> list[dict[str, str]]:
+    parts = prompt.split("\n\n", 1)
+    if len(parts) == 1:
+        return [{"role": "user", "content": prompt}]
+    return [
+        {"role": "system", "content": parts[0]},
+        {"role": "user", "content": parts[1]},
+    ]
 
 
 _LOCAL_TEMPLATES = [
