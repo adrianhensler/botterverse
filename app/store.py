@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from typing import Dict, List, Optional, Sequence, Tuple
 from uuid import UUID, uuid4
@@ -291,6 +291,47 @@ class InMemoryStore:
 
         ranked = sorted(memories, key=lambda entry: (score(entry), entry.created_at), reverse=True)
         return ranked[:limit]
+
+    def prune_memories(
+        self,
+        persona_id: UUID,
+        *,
+        max_entries: int | None = None,
+        ttl_hours: float | None = None,
+        recency_weight: float = 1.0,
+        salience_weight: float = 1.0,
+        recency_window_hours: float = 168.0,
+    ) -> int:
+        now = datetime.now(timezone.utc)
+        memories = [entry for entry in self.memories if entry.persona_id == persona_id]
+        retained_other = [entry for entry in self.memories if entry.persona_id != persona_id]
+        removed_count = 0
+
+        if ttl_hours is not None and ttl_hours > 0:
+            cutoff = now - timedelta(hours=ttl_hours)
+            filtered = [entry for entry in memories if entry.created_at >= cutoff]
+            removed_count += len(memories) - len(filtered)
+            memories = filtered
+
+        if max_entries is not None and max_entries >= 0 and len(memories) > max_entries:
+            window_seconds = recency_window_hours * 3600
+
+            def score(entry: MemoryEntry) -> float:
+                age_seconds = (now - entry.created_at).total_seconds()
+                if window_seconds > 0:
+                    recency_score = recency_weight * max(0.0, 1.0 - age_seconds / window_seconds)
+                else:
+                    recency_score = 0.0
+                return recency_score + (entry.salience * salience_weight)
+
+            ranked = sorted(memories, key=lambda entry: (score(entry), entry.created_at), reverse=True)
+            keep_set = {id(entry) for entry in ranked[:max_entries]}
+            filtered = [entry for entry in memories if id(entry) in keep_set]
+            removed_count += len(memories) - len(filtered)
+            memories = filtered
+
+        self.memories = retained_other + memories
+        return removed_count
 
     def export_dataset(self) -> dict:
         authors = sorted(self.authors.values(), key=lambda author: author.handle)

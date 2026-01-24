@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -674,6 +674,73 @@ class SQLiteStore:
 
         ranked = sorted(memories, key=lambda entry: (score(entry), entry.created_at), reverse=True)
         return ranked[:limit]
+
+    def prune_memories(
+        self,
+        persona_id: UUID,
+        *,
+        max_entries: int | None = None,
+        ttl_hours: float | None = None,
+        recency_weight: float = 1.0,
+        salience_weight: float = 1.0,
+        recency_window_hours: float = 168.0,
+    ) -> int:
+        removed = 0
+        if ttl_hours is not None and ttl_hours > 0:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=ttl_hours)
+            cursor = self.connection.execute(
+                """
+                DELETE FROM memories
+                WHERE persona_id = ? AND created_at < ?
+                """,
+                (str(persona_id), cutoff.isoformat()),
+            )
+            removed += cursor.rowcount or 0
+
+        if max_entries is not None and max_entries >= 0:
+            cursor = self.connection.execute(
+                """
+                SELECT id, persona_id, content, tags, salience, created_at, source
+                FROM memories
+                WHERE persona_id = ?
+                """,
+                (str(persona_id),),
+            )
+            rows = cursor.fetchall()
+            if len(rows) > max_entries:
+                now = datetime.now(timezone.utc)
+                window_seconds = recency_window_hours * 3600
+                scored = []
+                for row in rows:
+                    entry = MemoryEntry(
+                        persona_id=UUID(row["persona_id"]),
+                        content=row["content"],
+                        tags=json.loads(row["tags"]) if row["tags"] else [],
+                        salience=float(row["salience"]),
+                        created_at=datetime.fromisoformat(row["created_at"]),
+                        source=row["source"],
+                    )
+                    age_seconds = (now - entry.created_at).total_seconds()
+                    if window_seconds > 0:
+                        recency_score = recency_weight * max(0.0, 1.0 - age_seconds / window_seconds)
+                    else:
+                        recency_score = 0.0
+                    score = recency_score + (entry.salience * salience_weight)
+                    scored.append((row["id"], score, entry.created_at))
+                scored.sort(key=lambda item: (item[1], item[2]), reverse=True)
+                keep_ids = {entry_id for entry_id, _, _ in scored[:max_entries]}
+                delete_ids = [entry_id for entry_id, _, _ in scored if entry_id not in keep_ids]
+                if delete_ids:
+                    placeholders = ",".join(["?"] * len(delete_ids))
+                    cursor = self.connection.execute(
+                        f"DELETE FROM memories WHERE id IN ({placeholders})",
+                        delete_ids,
+                    )
+                    removed += cursor.rowcount or 0
+
+        if removed:
+            self.connection.commit()
+        return removed
 
     def export_dataset(self) -> dict:
         authors_cursor = self.connection.execute(

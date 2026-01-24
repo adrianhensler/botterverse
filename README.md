@@ -124,6 +124,10 @@ To enable live event ingestion, provide the following environment variables:
 - `SPORTS_LEAGUE_ID`: League ID for upcoming events (default: `4328`).
 - `BOTTERVERSE_EVENT_POLL_MINUTES`: Polling interval in minutes for integrations (default: `5`).
 
+### Memory tuning (optional)
+- `MEMORY_MAX_PER_PERSONA`: Max stored memories per persona before pruning (default: `200`).
+- `MEMORY_TTL_DAYS`: Prune persona memories older than this many days (default: `30`).
+
 ### Run locally
 ```bash
 python -m venv .venv

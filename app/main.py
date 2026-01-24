@@ -291,6 +291,14 @@ def _memory_snippets_for_persona(persona_id: UUID, limit: int = 5) -> List[str]:
     return [f"[{entry.source}] {entry.content}" for entry in memories]
 
 
+def _prune_memories(persona_id: UUID) -> None:
+    max_entries = MEMORY_MAX_PER_PERSONA if MEMORY_MAX_PER_PERSONA > 0 else None
+    ttl_hours = MEMORY_TTL_DAYS * 24 if MEMORY_TTL_DAYS > 0 else None
+    if max_entries is None and ttl_hours is None:
+        return
+    store.prune_memories(persona_id, max_entries=max_entries, ttl_hours=ttl_hours)
+
+
 bot_director = BotDirector(personas, memory_provider=_memory_snippets_for_persona)
 persona_lookup = {persona.id: persona for persona in personas}
 last_processed_dm_per_thread: Dict[tuple[UUID, UUID], UUID] = {}  # Track last processed message per thread
@@ -306,6 +314,8 @@ DM_SUMMARY_TRIGGER_COUNT = int(os.getenv("DM_SUMMARY_TRIGGER_COUNT", "12"))
 DM_SUMMARY_CONTEXT_LIMIT = int(os.getenv("DM_SUMMARY_CONTEXT_LIMIT", "20"))
 DM_SUMMARY_SALIENCE = float(os.getenv("DM_SUMMARY_SALIENCE", "0.95"))
 DM_STORE_RAW_MEMORY = os.getenv("DM_STORE_RAW_MEMORY", "true").lower() == "true"
+MEMORY_MAX_PER_PERSONA = int(os.getenv("MEMORY_MAX_PER_PERSONA", "200"))
+MEMORY_TTL_DAYS = float(os.getenv("MEMORY_TTL_DAYS", "30"))
 EVENT_POLL_MINUTES = int(os.getenv("BOTTERVERSE_EVENT_POLL_MINUTES", "5"))
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
 NEWS_COUNTRY = os.getenv("NEWS_COUNTRY", "us")
@@ -337,6 +347,7 @@ def run_director_tick() -> dict:
         created_post = store.create_post(planned_post.payload)
         created.append(created_post)
         store.add_memory_from_post(planned_post.payload.author_id, created_post)
+        _prune_memories(planned_post.payload.author_id)
         if planned_post.audit_entry is not None:
             store.add_audit_entry(
                 AuditEntry(
@@ -404,6 +415,7 @@ def _maybe_summarize_dm_thread(
                 source="dm_summary",
             )
         )
+        _prune_memories(persona.id)
         store.add_audit_entry(
             AuditEntry(
                 prompt=result.prompt,
@@ -476,6 +488,7 @@ def run_dm_reply_tick() -> dict:
             created.append(created_message)
             if DM_STORE_RAW_MEMORY:
                 store.add_memory_from_dm(persona.id, created_message)
+                _prune_memories(persona.id)
             store.add_audit_entry(
                 AuditEntry(
                     prompt=result.prompt,
@@ -577,6 +590,7 @@ def run_event_ingest_tick() -> dict:
                 payload=bot_event.payload,
                 tags=[bot_event.kind],
             )
+            _prune_memories(persona.id)
         ingested.append({"topic": event.topic, "kind": event.kind, "external_id": event.external_id})
     if events and not ingested:
         logger.info("No new integration events to ingest.")
