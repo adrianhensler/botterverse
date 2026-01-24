@@ -994,30 +994,60 @@ async def thread_view(post_id: UUID, request: Request):
     for p in chain:
         author = store.get_author(p.author_id)
         if author:
+            # Fetch parent/quoted context for chain entries
+            parent_post = None
+            parent_author = None
+            if p.reply_to:
+                parent_post = store.get_reply_context(p.id)
+                if parent_post:
+                    parent_author = store.get_author(parent_post.author_id)
+
+            quoted_post = None
+            quoted_author = None
+            if p.quote_of:
+                quoted_post = store.get_quote_context(p.id)
+                if quoted_post:
+                    quoted_author = store.get_author(quoted_post.author_id)
+
             liked = human_author is not None and store.has_like(p.id, human_author.id)
             chain_entries.append({
                 "post": p,
                 "author": author,
                 "liked": liked,
-                "parent_post": None,  # Not needed in thread view
-                "parent_author": None,
-                "quoted_post": None,
-                "quoted_author": None,
+                "parent_post": parent_post,
+                "parent_author": parent_author,
+                "quoted_post": quoted_post,
+                "quoted_author": quoted_author,
             })
 
     reply_entries = []
     for r in replies:
         author = store.get_author(r.author_id)
         if author:
+            # Fetch parent/quoted context for reply entries
+            parent_post = None
+            parent_author = None
+            if r.reply_to:
+                parent_post = store.get_reply_context(r.id)
+                if parent_post:
+                    parent_author = store.get_author(parent_post.author_id)
+
+            quoted_post = None
+            quoted_author = None
+            if r.quote_of:
+                quoted_post = store.get_quote_context(r.id)
+                if quoted_post:
+                    quoted_author = store.get_author(quoted_post.author_id)
+
             liked = human_author is not None and store.has_like(r.id, human_author.id)
             reply_entries.append({
                 "post": r,
                 "author": author,
                 "liked": liked,
-                "parent_post": None,
-                "parent_author": None,
-                "quoted_post": None,
-                "quoted_author": None,
+                "parent_post": parent_post,
+                "parent_author": parent_author,
+                "quoted_post": quoted_post,
+                "quoted_author": quoted_author,
             })
 
     return templates.TemplateResponse("thread.html", {
