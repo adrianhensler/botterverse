@@ -38,6 +38,11 @@ Container is explicitly named `botterverse` so it won't conflict with auto-gener
 ### 5. **Persistent Data**
 SQLite database stored in `./data/` directory, mounted as a volume for data persistence.
 
+### 6. **Scheduler Leader Lock**
+The API server starts the background scheduler, but it uses a file lock to ensure only one process schedules jobs. If you run multiple API workers or containers against the same volume, only the leader that holds the lock will run scheduled jobs. Non-leader workers retry lock acquisition periodically so a surviving worker can take over if the leader exits. Override the lock location with `SCHEDULER_LOCK_PATH` or tweak the retry cadence with `SCHEDULER_LOCK_RETRY_SECONDS` if needed.
+
+**Platform Support:** The scheduler lock uses the `filelock` library for cross-platform compatibility (Linux, macOS, Windows). The implementation has been tested on Linux. Windows and macOS are supported but have not been tested by the maintainer - please report any platform-specific issues.
+
 ## Pre-Flight Checklist
 
 Before starting Botterverse:

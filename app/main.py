@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
 import os
@@ -7,8 +8,10 @@ import random
 from collections import defaultdict
 from collections import deque
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 from uuid import UUID, uuid4, uuid5
+
+from filelock import FileLock, Timeout
 
 # Deterministic namespace for generating consistent bot UUIDs across restarts
 BOTTERVERSE_NAMESPACE = UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
@@ -45,6 +48,11 @@ app.add_middleware(
 logger = logging.getLogger("botterverse")
 store = build_store()
 scheduler = BackgroundScheduler(timezone=timezone.utc)
+SCHEDULER_LOCK_PATH = os.getenv("SCHEDULER_LOCK_PATH", "data/scheduler.lock")
+SCHEDULER_LOCK_RETRY_SECONDS = int(os.getenv("SCHEDULER_LOCK_RETRY_SECONDS", "30"))
+scheduler_lock_handle: Optional[FileLock] = None
+scheduler_retry_task: Optional[asyncio.Task] = None
+scheduler_started = False
 
 # Templates setup
 templates = Jinja2Templates(directory="app/templates")
@@ -436,8 +444,36 @@ def run_event_ingest_tick() -> dict:
     return {"ingested": ingested}
 
 
-@app.on_event("startup")
-async def start_scheduler() -> None:
+def acquire_scheduler_lock() -> bool:
+    global scheduler_lock_handle
+    if scheduler_lock_handle is not None:
+        return True
+    try:
+        lock = FileLock(SCHEDULER_LOCK_PATH, timeout=0)  # Non-blocking
+        lock.acquire()
+        scheduler_lock_handle = lock
+        logger.info("Acquired scheduler lock: %s", SCHEDULER_LOCK_PATH)
+        return True
+    except Timeout:
+        logger.info("Scheduler lock already held; skipping scheduler startup.")
+        return False
+    except OSError as exc:
+        logger.exception("Failed to acquire scheduler lock: %s", exc)
+        return False
+
+
+def release_scheduler_lock() -> None:
+    global scheduler_lock_handle
+    if scheduler_lock_handle is None:
+        return
+    try:
+        scheduler_lock_handle.release()
+    except Exception as exc:
+        logger.exception("Failed to release scheduler lock: %s", exc)
+    scheduler_lock_handle = None
+
+
+def configure_scheduler_jobs() -> None:
     scheduler.add_job(
         run_director_tick,
         "interval",
@@ -466,12 +502,50 @@ async def start_scheduler() -> None:
         id="event_ingest_tick",
         replace_existing=True,
     )
+
+
+def start_scheduler_jobs() -> None:
+    global scheduler_started
+    if scheduler_started:
+        return
+    configure_scheduler_jobs()
     scheduler.start()
+    scheduler_started = True
+
+
+async def retry_scheduler_lock() -> None:
+    global scheduler_retry_task
+    try:
+        while not scheduler_started:
+            await asyncio.sleep(SCHEDULER_LOCK_RETRY_SECONDS)
+            if acquire_scheduler_lock():
+                start_scheduler_jobs()
+                break
+    finally:
+        scheduler_retry_task = None
+
+
+@app.on_event("startup")
+async def start_scheduler() -> None:
+    if not acquire_scheduler_lock():
+        global scheduler_retry_task
+        if scheduler_retry_task is None:
+            scheduler_retry_task = asyncio.create_task(retry_scheduler_lock())
+        return
+    start_scheduler_jobs()
 
 
 @app.on_event("shutdown")
 async def shutdown_scheduler() -> None:
-    scheduler.shutdown(wait=False)
+    if scheduler_retry_task is not None:
+        scheduler_retry_task.cancel()
+        try:
+            await scheduler_retry_task
+        except asyncio.CancelledError:
+            pass
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
+    release_scheduler_lock()
 
 
 @app.get("/health")
