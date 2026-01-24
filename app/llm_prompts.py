@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Sequence
+
 from .llm_types import LlmContext, PersonaLike
 
 
@@ -37,4 +39,20 @@ def build_user_prompt(context: LlmContext) -> str:
         f"Event context: {event_context}.\n"
         f"Latest event topic: {context.latest_event_topic}.\n"
         "Write one post in the persona's voice."
+    )
+
+
+def build_dm_summary_prompt(
+    persona: PersonaLike,
+    thread_snippets: Sequence[str],
+    participant_context: str,
+) -> str:
+    del persona
+    snippets = "\n".join(f"- {snippet}" for snippet in thread_snippets)
+    return (
+        "You are summarizing a direct message thread into a concise memory entry.\n"
+        "Focus on relationship-relevant details (preferences, personal facts, commitments, plans, follow-ups).\n"
+        "Keep it to 2-4 sentences. Avoid quoting messages verbatim. Output only the summary.\n\n"
+        f"Thread context: {participant_context}\n"
+        f"Messages:\n{snippets or '- (none)'}"
     )

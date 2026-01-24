@@ -30,8 +30,18 @@ from .integrations.news import fetch_news_events
 from .integrations.sports import fetch_sports_events
 from .integrations.weather import fetch_weather_events
 from .export_utils import attach_signature, verify_signature
-from .llm_client import generate_post_with_audit
-from .models import AuditEntry, AuditEntryWithPost, Author, DmCreate, DmMessage, Post, PostCreate, TimelineEntry
+from .llm_client import generate_dm_summary_with_audit, generate_post_with_audit
+from .models import (
+    AuditEntry,
+    AuditEntryWithPost,
+    Author,
+    DmCreate,
+    DmMessage,
+    MemoryEntry,
+    Post,
+    PostCreate,
+    TimelineEntry,
+)
 from .store_factory import build_store
 
 app = FastAPI(title="Botterverse API", version="0.1.0")
@@ -284,6 +294,7 @@ def _memory_snippets_for_persona(persona_id: UUID, limit: int = 5) -> List[str]:
 bot_director = BotDirector(personas, memory_provider=_memory_snippets_for_persona)
 persona_lookup = {persona.id: persona for persona in personas}
 processed_dm_ids: set[UUID] = set()
+last_dm_summary_ids: Dict[tuple[UUID, UUID], UUID] = {}
 last_like_at: Dict[UUID, datetime] = {}
 liked_posts_by_persona: Dict[UUID, Set[UUID]] = defaultdict(set)
 recent_external_ids: deque[str] = deque(maxlen=500)
@@ -291,6 +302,9 @@ recent_external_ids_set: Set[str] = set()
 
 LIKE_COOLDOWN = timedelta(minutes=10)
 LIKE_PROBABILITY = 0.15
+DM_SUMMARY_TRIGGER_COUNT = int(os.getenv("DM_SUMMARY_TRIGGER_COUNT", "12"))
+DM_SUMMARY_CONTEXT_LIMIT = int(os.getenv("DM_SUMMARY_CONTEXT_LIMIT", "20"))
+DM_SUMMARY_SALIENCE = float(os.getenv("DM_SUMMARY_SALIENCE", "0.95"))
 EVENT_POLL_MINUTES = int(os.getenv("BOTTERVERSE_EVENT_POLL_MINUTES", "5"))
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
 NEWS_COUNTRY = os.getenv("NEWS_COUNTRY", "us")
@@ -336,59 +350,141 @@ def run_director_tick() -> dict:
     return {"created": created, "paused": False}
 
 
+def _dm_thread_key(user_a: UUID, user_b: UUID) -> tuple[UUID, UUID]:
+    ordered = sorted([user_a, user_b], key=lambda value: str(value))
+    return ordered[0], ordered[1]
+
+
+def _messages_since(thread: List[DmMessage], last_summary_id: UUID | None) -> List[DmMessage]:
+    if last_summary_id is None:
+        return thread
+    for index, message in enumerate(thread):
+        if message.id == last_summary_id:
+            return thread[index + 1 :]
+    return thread
+
+
+def _maybe_summarize_dm_thread(
+    thread: List[DmMessage],
+    *,
+    persona: Persona,
+    sender: Author,
+    recipient: Author,
+    force: bool,
+) -> None:
+    if not thread:
+        return
+    thread_key = _dm_thread_key(sender.id, recipient.id)
+    last_summary_id = last_dm_summary_ids.get(thread_key)
+    if last_summary_id == thread[-1].id:
+        return
+    if not force and len(thread) < DM_SUMMARY_TRIGGER_COUNT:
+        return
+    to_summarize = _messages_since(thread, last_summary_id)
+    if not to_summarize:
+        return
+    snippets: List[str] = []
+    for message in to_summarize:
+        author = store.get_author(message.sender_id)
+        handle = author.handle if author else "unknown"
+        snippets.append(f"{handle}: {message.content}")
+    participant_context = f"Direct message thread between {sender.handle} and {recipient.handle}."
+    result = generate_dm_summary_with_audit(persona, snippets, participant_context)
+    summary = result.output.strip()
+    if summary:
+        store.add_memory(
+            MemoryEntry(
+                persona_id=persona.id,
+                content=summary,
+                tags=["dm_summary"],
+                salience=DM_SUMMARY_SALIENCE,
+                created_at=datetime.now(timezone.utc),
+                source="dm_summary",
+            )
+        )
+    last_dm_summary_ids[thread_key] = thread[-1].id
+
+
 def run_dm_reply_tick() -> dict:
     created: List[DmMessage] = []
     for messages in store.list_dm_threads():
         if not messages:
             continue
         latest_message = messages[-1]
-        if latest_message.id in processed_dm_ids:
-            continue
         sender = store.get_author(latest_message.sender_id)
         recipient = store.get_author(latest_message.recipient_id)
         if sender is None or recipient is None:
             processed_dm_ids.add(latest_message.id)
             continue
-        if recipient.type != "bot" or sender.type == "bot":
-            processed_dm_ids.add(latest_message.id)
+        persona: Optional[Persona] = None
+        if sender.type == "bot":
+            persona = persona_lookup.get(sender.id)
+        elif recipient.type == "bot":
+            persona = persona_lookup.get(recipient.id)
+        reply_created = False
+        if latest_message.id not in processed_dm_ids:
+            if recipient.type != "bot" or sender.type == "bot":
+                processed_dm_ids.add(latest_message.id)
+            elif persona is None:
+                processed_dm_ids.add(latest_message.id)
+            else:
+                thread = store.list_dm_thread(latest_message.sender_id, latest_message.recipient_id, limit=10)
+                snippets: List[str] = []
+                for message in thread:
+                    author = store.get_author(message.sender_id)
+                    handle = author.handle if author else "unknown"
+                    snippets.append(f"{handle}: {message.content}")
+                latest_topic = thread[-1].content if thread else latest_message.content
+                context = {
+                    "latest_event_topic": latest_topic,
+                    "recent_timeline_snippets": snippets,
+                    "event_context": f"Direct message thread between {sender.handle} and {recipient.handle}.",
+                    "persona_memories": _memory_snippets_for_persona(persona.id),
+                }
+                result = generate_post_with_audit(persona, context)
+                response_payload = DmCreate(
+                    sender_id=latest_message.recipient_id,
+                    recipient_id=latest_message.sender_id,
+                    content=result.output,
+                )
+                created_message = store.create_dm(response_payload)
+                created.append(created_message)
+                store.add_memory_from_dm(persona.id, created_message)
+                store.add_audit_entry(
+                    AuditEntry(
+                        prompt=result.prompt,
+                        model_name=result.model_name,
+                        output=result.output,
+                        timestamp=datetime.now(timezone.utc),
+                        persona_id=persona.id,
+                        dm_id=created_message.id,
+                    )
+                )
+                processed_dm_ids.add(latest_message.id)
+                reply_created = True
+        if persona is None or sender.type == recipient.type:
             continue
-        persona = persona_lookup.get(recipient.id)
-        if persona is None:
-            processed_dm_ids.add(latest_message.id)
-            continue
-        thread = store.list_dm_thread(latest_message.sender_id, latest_message.recipient_id, limit=10)
-        snippets: List[str] = []
-        for message in thread:
-            author = store.get_author(message.sender_id)
-            handle = author.handle if author else "unknown"
-            snippets.append(f"{handle}: {message.content}")
-        latest_topic = thread[-1].content if thread else latest_message.content
-        context = {
-            "latest_event_topic": latest_topic,
-            "recent_timeline_snippets": snippets,
-            "event_context": f"Direct message thread between {sender.handle} and {recipient.handle}.",
-            "persona_memories": _memory_snippets_for_persona(persona.id),
-        }
-        result = generate_post_with_audit(persona, context)
-        response_payload = DmCreate(
-            sender_id=latest_message.recipient_id,
-            recipient_id=latest_message.sender_id,
-            content=result.output,
+        thread_for_summary = store.list_dm_thread(
+            latest_message.sender_id,
+            latest_message.recipient_id,
+            limit=DM_SUMMARY_CONTEXT_LIMIT,
         )
-        created_message = store.create_dm(response_payload)
-        created.append(created_message)
-        store.add_memory_from_dm(persona.id, created_message)
-        store.add_audit_entry(
-            AuditEntry(
-                prompt=result.prompt,
-                model_name=result.model_name,
-                output=result.output,
-                timestamp=datetime.now(timezone.utc),
-                persona_id=persona.id,
-                dm_id=created_message.id,
+        if reply_created:
+            _maybe_summarize_dm_thread(
+                thread_for_summary,
+                persona=persona,
+                sender=sender,
+                recipient=recipient,
+                force=True,
             )
-        )
-        processed_dm_ids.add(latest_message.id)
+        elif len(messages) >= DM_SUMMARY_TRIGGER_COUNT:
+            _maybe_summarize_dm_thread(
+                thread_for_summary,
+                persona=persona,
+                sender=sender,
+                recipient=recipient,
+                force=False,
+            )
     return {"created": created}
 
 
