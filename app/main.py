@@ -404,6 +404,17 @@ def _maybe_summarize_dm_thread(
                 source="dm_summary",
             )
         )
+        store.add_audit_entry(
+            AuditEntry(
+                prompt=result.prompt,
+                model_name=result.model_name,
+                output=result.output,
+                timestamp=datetime.now(timezone.utc),
+                persona_id=persona.id,
+                post_id=None,
+                dm_id=None,
+            )
+        )
         last_dm_summary_ids[thread_key] = full_thread[-1].id
 
 
