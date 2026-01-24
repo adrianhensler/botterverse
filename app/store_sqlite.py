@@ -442,6 +442,46 @@ class SQLiteStore:
             threads.append(current_messages)
         return threads
 
+    def get_dm_thread_preview(self, user_a: UUID, user_b: UUID) -> Optional[DmMessage]:
+        """Get last message in thread for preview."""
+        thread = self.list_dm_thread(user_a, user_b, limit=1)
+        return thread[-1] if thread else None
+
+    def count_dm_threads_with_metadata(self, human_id: UUID) -> List[dict]:
+        """Get all DM threads with metadata for sidebar."""
+        threads = []
+        all_threads = self.list_dm_threads()
+
+        for thread_messages in all_threads:
+            if not thread_messages:
+                continue
+
+            first_msg = thread_messages[0]
+            if human_id not in [first_msg.sender_id, first_msg.recipient_id]:
+                continue
+
+            bot_id = (
+                first_msg.recipient_id
+                if first_msg.sender_id == human_id
+                else first_msg.sender_id
+            )
+            bot = self.get_author(bot_id)
+
+            if not bot or bot.type != "bot":
+                continue
+
+            last_msg = thread_messages[-1]
+
+            threads.append({
+                "bot": bot,
+                "last_message": last_msg,
+                "message_count": len(thread_messages),
+                "unread": last_msg.sender_id == bot_id,  # Simple heuristic
+            })
+
+        threads.sort(key=lambda t: t["last_message"].created_at, reverse=True)
+        return threads
+
     def toggle_like(self, post_id: UUID, author_id: UUID) -> int:
         cursor = self.connection.execute(
             "SELECT 1 FROM likes WHERE post_id = ? AND author_id = ?",
