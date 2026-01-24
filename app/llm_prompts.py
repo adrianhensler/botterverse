@@ -27,10 +27,13 @@ def build_system_prompt(persona: PersonaLike) -> str:
 
 def build_user_prompt(context: LlmContext) -> str:
     snippets = "\n".join(f"- {snippet}" for snippet in context.recent_timeline_snippets)
+    memories = "\n".join(f"- {memory}" for memory in context.persona_memories)
     event_context = context.event_context or "(none)"
     return (
         "Recent timeline snippets:\n"
         f"{snippets or '- (none)'}\n"
+        "Persona memories:\n"
+        f"{memories or '- (none)'}\n"
         f"Event context: {event_context}.\n"
         f"Latest event topic: {context.latest_event_topic}.\n"
         "Write one post in the persona's voice."

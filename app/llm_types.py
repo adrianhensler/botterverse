@@ -14,3 +14,4 @@ class LlmContext:
     latest_event_topic: str
     recent_timeline_snippets: Sequence[str]
     event_context: str
+    persona_memories: Sequence[str]

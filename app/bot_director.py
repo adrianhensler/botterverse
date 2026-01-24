@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import json
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Sequence
+from typing import Callable, Dict, List, Sequence
 from uuid import UUID, uuid4
 
 from .llm_client import generate_post_with_audit
@@ -51,12 +51,17 @@ class BotDirector:
     REPLY_PROBABILITY = 0.15
     QUOTE_PROBABILITY = 0.3
 
-    def __init__(self, personas: List[Persona]) -> None:
+    def __init__(
+        self,
+        personas: List[Persona],
+        memory_provider: Callable[[UUID, int], Sequence[str]] | None = None,
+    ) -> None:
         self.personas = personas
         self.events: List[BotEvent] = []
         self.last_posted_at: Dict[UUID, datetime] = {}
         self.replied_post_ids: Dict[UUID, set[UUID]] = defaultdict(set)
         self.pending_reactions: List[ScheduledReaction] = []
+        self.memory_provider = memory_provider
         self._lock = threading.RLock()
 
     def register_event(self, event: BotEvent) -> None:
@@ -98,11 +103,13 @@ class BotDirector:
         event: BotEvent,
         recent_snippets: Sequence[str],
     ) -> PlannedPost:
+        memories = self._persona_memories(persona.id)
         context = {
             "latest_event_topic": event.topic,
             "recent_timeline_snippets": [event.topic, *recent_snippets],
             "event_context": self._event_context(event),
             "event_payload": event.payload,
+            "persona_memories": memories,
         }
         output, audit_entry = self._generate_post_content(persona, context)
         return PlannedPost(
@@ -122,11 +129,13 @@ class BotDirector:
         recent_snippets: Sequence[str],
     ) -> PlannedPost:
         latest_event = self._latest_event()
+        memories = self._persona_memories(persona.id)
         context = {
             "latest_event_topic": latest_topic,
             "recent_timeline_snippets": recent_snippets,
             "event_context": self._event_context(latest_event) if latest_event else "",
             "event_payload": latest_event.payload if latest_event else {},
+            "persona_memories": memories,
         }
         output, audit_entry = self._generate_post_content(persona, context)
         return PlannedPost(
@@ -154,6 +163,7 @@ class BotDirector:
         target = random.choice(candidates)
         latest_event = self._latest_event()
         use_quote = random.random() < self.QUOTE_PROBABILITY
+        memories = self._persona_memories(persona.id)
         context = {
             "latest_event_topic": target.content or latest_topic,
             "recent_timeline_snippets": [target.content, *recent_snippets],
@@ -161,6 +171,7 @@ class BotDirector:
             "quote_of_post": target.content if use_quote else "",
             "event_context": self._event_context(latest_event) if latest_event else "",
             "event_payload": latest_event.payload if latest_event else {},
+            "persona_memories": memories,
         }
         self.replied_post_ids[persona.id].add(target.id)
         output, audit_entry = self._generate_post_content(persona, context)
@@ -286,6 +297,14 @@ class BotDirector:
             handles = kind_map[event.kind]
             return [persona for persona in self.personas if persona.handle in handles]
         return [persona for persona in self.personas if self._event_matches_interests(persona, event)]
+
+    def matching_personas_for_event(self, event: BotEvent) -> List[Persona]:
+        return self._personas_for_event(event)
+
+    def _persona_memories(self, persona_id: UUID, limit: int = 5) -> Sequence[str]:
+        if self.memory_provider is None:
+            return []
+        return self.memory_provider(persona_id, limit)
 
 
 def seed_personas(personas: List[Persona]) -> List[Author]:

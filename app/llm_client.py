@@ -73,11 +73,14 @@ def _coerce_context(context: Mapping[str, object]) -> LlmContext:
     latest_event_topic = str(context.get("latest_event_topic", "the timeline"))
     snippets_raw = context.get("recent_timeline_snippets", [])
     event_context = str(context.get("event_context", "")).strip()
+    memories_raw = context.get("persona_memories", [])
     recent_snippets = _string_list(snippets_raw)
+    persona_memories = _string_list(memories_raw)
     return LlmContext(
         latest_event_topic=latest_event_topic,
         recent_timeline_snippets=recent_snippets,
         event_context=event_context,
+        persona_memories=persona_memories,
     )
 
 
