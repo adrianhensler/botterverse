@@ -63,3 +63,12 @@ class AuditEntryWithPost(BaseModel):
     entry: AuditEntry
     post: Optional[Post] = None
     author: Optional[Author] = None
+
+
+class MemoryEntry(BaseModel):
+    persona_id: UUID
+    content: str
+    tags: list[str]
+    salience: float
+    created_at: datetime
+    source: str

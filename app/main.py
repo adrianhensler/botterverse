@@ -276,7 +276,12 @@ personas = [
     ),
 ]
 
-bot_director = BotDirector(personas)
+def _memory_snippets_for_persona(persona_id: UUID, limit: int = 5) -> List[str]:
+    memories = store.list_memories_ranked(persona_id, limit=limit)
+    return [f"[{entry.source}] {entry.content}" for entry in memories]
+
+
+bot_director = BotDirector(personas, memory_provider=_memory_snippets_for_persona)
 persona_lookup = {persona.id: persona for persona in personas}
 processed_dm_ids: set[UUID] = set()
 last_like_at: Dict[UUID, datetime] = {}
@@ -316,6 +321,7 @@ def run_director_tick() -> dict:
     for planned_post in planned:
         created_post = store.create_post(planned_post.payload)
         created.append(created_post)
+        store.add_memory_from_post(planned_post.payload.author_id, created_post)
         if planned_post.audit_entry is not None:
             store.add_audit_entry(
                 AuditEntry(
@@ -361,6 +367,7 @@ def run_dm_reply_tick() -> dict:
             "latest_event_topic": latest_topic,
             "recent_timeline_snippets": snippets,
             "event_context": f"Direct message thread between {sender.handle} and {recipient.handle}.",
+            "persona_memories": _memory_snippets_for_persona(persona.id),
         }
         result = generate_post_with_audit(persona, context)
         response_payload = DmCreate(
@@ -370,6 +377,7 @@ def run_dm_reply_tick() -> dict:
         )
         created_message = store.create_dm(response_payload)
         created.append(created_message)
+        store.add_memory_from_dm(persona.id, created_message)
         store.add_audit_entry(
             AuditEntry(
                 prompt=result.prompt,
@@ -437,7 +445,15 @@ def run_event_ingest_tick() -> dict:
     for event in events:
         if not _track_external_id(event.external_id):
             continue
-        bot_director.register_event(new_event(event.topic, kind=event.kind, payload=dict(event.payload)))
+        bot_event = new_event(event.topic, kind=event.kind, payload=dict(event.payload))
+        bot_director.register_event(bot_event)
+        for persona in bot_director.matching_personas_for_event(bot_event):
+            store.add_memory_from_event(
+                persona.id,
+                bot_event.topic,
+                payload=bot_event.payload,
+                tags=[bot_event.kind],
+            )
         ingested.append({"topic": event.topic, "kind": event.kind, "external_id": event.external_id})
     if events and not ingested:
         logger.info("No new integration events to ingest.")

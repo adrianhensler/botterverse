@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timezone
+import json
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 from uuid import UUID, uuid4
 
-from .models import AuditEntry, Author, DmCreate, DmMessage, Post, PostCreate
+from .models import AuditEntry, Author, DmCreate, DmMessage, MemoryEntry, Post, PostCreate
 
 
 class SQLiteStore:
@@ -58,6 +59,15 @@ class SQLiteStore:
                 persona_id TEXT NOT NULL,
                 post_id TEXT,
                 dm_id TEXT
+            );
+            CREATE TABLE IF NOT EXISTS memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                persona_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                tags TEXT NOT NULL,
+                salience REAL NOT NULL,
+                created_at TEXT NOT NULL,
+                source TEXT NOT NULL
             );
             """
         )
@@ -448,6 +458,127 @@ class SQLiteStore:
         ]
         return list(reversed(entries))
 
+    def add_memory(self, entry: MemoryEntry) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO memories (persona_id, content, tags, salience, created_at, source)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(entry.persona_id),
+                entry.content,
+                json.dumps(entry.tags, ensure_ascii=False),
+                entry.salience,
+                entry.created_at.isoformat(),
+                entry.source,
+            ),
+        )
+        self.connection.commit()
+
+    def add_memory_from_post(
+        self,
+        persona_id: UUID,
+        post: Post,
+        *,
+        tags: Sequence[str] | None = None,
+        salience: float = 0.6,
+    ) -> MemoryEntry:
+        entry = MemoryEntry(
+            persona_id=persona_id,
+            content=post.content,
+            tags=list(tags or ["post"]),
+            salience=salience,
+            created_at=post.created_at,
+            source="post",
+        )
+        self.add_memory(entry)
+        return entry
+
+    def add_memory_from_dm(
+        self,
+        persona_id: UUID,
+        message: DmMessage,
+        *,
+        tags: Sequence[str] | None = None,
+        salience: float = 0.7,
+    ) -> MemoryEntry:
+        entry = MemoryEntry(
+            persona_id=persona_id,
+            content=message.content,
+            tags=list(tags or ["dm"]),
+            salience=salience,
+            created_at=message.created_at,
+            source="dm",
+        )
+        self.add_memory(entry)
+        return entry
+
+    def add_memory_from_event(
+        self,
+        persona_id: UUID,
+        topic: str,
+        *,
+        payload: Dict[str, object] | None = None,
+        tags: Sequence[str] | None = None,
+        salience: float = 0.8,
+    ) -> MemoryEntry:
+        content = topic
+        if payload:
+            serialized = json.dumps(payload, default=str, ensure_ascii=False)
+            content = f"{topic} (payload: {serialized})"
+        entry = MemoryEntry(
+            persona_id=persona_id,
+            content=content,
+            tags=list(tags or ["event"]),
+            salience=salience,
+            created_at=datetime.now(timezone.utc),
+            source="event",
+        )
+        self.add_memory(entry)
+        return entry
+
+    def list_memories_ranked(
+        self,
+        persona_id: UUID,
+        limit: int = 5,
+        *,
+        recency_weight: float = 1.0,
+        salience_weight: float = 1.0,
+        recency_window_hours: float = 168.0,
+    ) -> List[MemoryEntry]:
+        cursor = self.connection.execute(
+            """
+            SELECT persona_id, content, tags, salience, created_at, source
+            FROM memories
+            WHERE persona_id = ?
+            """,
+            (str(persona_id),),
+        )
+        memories = [
+            MemoryEntry(
+                persona_id=UUID(row["persona_id"]),
+                content=row["content"],
+                tags=json.loads(row["tags"]) if row["tags"] else [],
+                salience=float(row["salience"]),
+                created_at=datetime.fromisoformat(row["created_at"]),
+                source=row["source"],
+            )
+            for row in cursor.fetchall()
+        ]
+        now = datetime.now(timezone.utc)
+        window_seconds = recency_window_hours * 3600
+
+        def score(entry: MemoryEntry) -> float:
+            age_seconds = (now - entry.created_at).total_seconds()
+            if window_seconds > 0:
+                recency_score = recency_weight * max(0.0, 1.0 - age_seconds / window_seconds)
+            else:
+                recency_score = 0.0
+            return recency_score + (entry.salience * salience_weight)
+
+        ranked = sorted(memories, key=lambda entry: (score(entry), entry.created_at), reverse=True)
+        return ranked[:limit]
+
     def export_dataset(self) -> dict:
         authors_cursor = self.connection.execute(
             "SELECT id, handle, display_name, type FROM authors ORDER BY handle"
@@ -526,6 +657,24 @@ class SQLiteStore:
             }
             for row in audit_cursor.fetchall()
         ]
+        memories_cursor = self.connection.execute(
+            """
+            SELECT persona_id, content, tags, salience, created_at, source
+            FROM memories
+            ORDER BY created_at ASC, id ASC
+            """
+        )
+        memories = [
+            {
+                "persona_id": row["persona_id"],
+                "content": row["content"],
+                "tags": json.loads(row["tags"]) if row["tags"] else [],
+                "salience": row["salience"],
+                "created_at": row["created_at"],
+                "source": row["source"],
+            }
+            for row in memories_cursor.fetchall()
+        ]
         return {
             "metadata": {
                 "version": 1,
@@ -536,6 +685,7 @@ class SQLiteStore:
                     "dms": len(dms),
                     "likes": len(likes),
                     "audit_entries": len(audit_entries),
+                    "memories": len(memories),
                 },
             },
             "authors": authors,
@@ -543,6 +693,7 @@ class SQLiteStore:
             "dms": dms,
             "likes": likes,
             "audit_entries": audit_entries,
+            "memories": memories,
         }
 
     def import_dataset(self, payload: dict) -> None:
@@ -554,6 +705,7 @@ class SQLiteStore:
             DELETE FROM posts;
             DELETE FROM authors;
             DELETE FROM audit_entries;
+            DELETE FROM memories;
             """
         )
         for author in payload.get("authors", []):
@@ -624,6 +776,21 @@ class SQLiteStore:
                     entry["persona_id"],
                     entry.get("post_id"),
                     entry.get("dm_id"),
+                ),
+            )
+        for entry in payload.get("memories", []):
+            cursor.execute(
+                """
+                INSERT INTO memories (persona_id, content, tags, salience, created_at, source)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    entry["persona_id"],
+                    entry["content"],
+                    json.dumps(entry.get("tags", []), ensure_ascii=False),
+                    entry.get("salience", 0.0),
+                    entry["created_at"],
+                    entry.get("source", "unknown"),
                 ),
             )
         self.connection.commit()
