@@ -293,7 +293,7 @@ def _memory_snippets_for_persona(persona_id: UUID, limit: int = 5) -> List[str]:
 
 bot_director = BotDirector(personas, memory_provider=_memory_snippets_for_persona)
 persona_lookup = {persona.id: persona for persona in personas}
-processed_dm_ids: set[UUID] = set()
+processed_dm_ids: deque[UUID] = deque(maxlen=500)  # Keep last 500 processed DM IDs
 last_dm_summary_ids: Dict[tuple[UUID, UUID], UUID] = {}
 last_like_at: Dict[UUID, datetime] = {}
 liked_posts_by_persona: Dict[UUID, Set[UUID]] = defaultdict(set)
@@ -427,7 +427,7 @@ def run_dm_reply_tick() -> dict:
         sender = store.get_author(latest_message.sender_id)
         recipient = store.get_author(latest_message.recipient_id)
         if sender is None or recipient is None:
-            processed_dm_ids.add(latest_message.id)
+            processed_dm_ids.append(latest_message.id)
             continue
         persona: Optional[Persona] = None
         if sender.type == "bot":
@@ -476,10 +476,10 @@ def run_dm_reply_tick() -> dict:
                     dm_id=created_message.id,
                 )
             )
-            processed_dm_ids.add(latest_message.id)
+            processed_dm_ids.append(latest_message.id)
             reply_created = True
         elif latest_message.id not in processed_dm_ids:
-            processed_dm_ids.add(latest_message.id)
+            processed_dm_ids.append(latest_message.id)
         if persona is None or sender.type == recipient.type:
             continue
         thread_for_summary = messages
@@ -1011,6 +1011,39 @@ async def dms_html(request: Request, bot_id: str):
             message=msg,
             human_author=human_author,
             bot_name=bot.display_name
+        )
+        html_parts.append(html)
+
+    return HTMLResponse(content="".join(html_parts))
+
+
+@app.get("/api/dm-threads-html", response_class=HTMLResponse)
+async def dm_threads_html(request: Request, bot_id: Optional[str] = None):
+    """HTMX endpoint - Returns DM thread list with previews"""
+    authors = store.list_authors()
+    human_author = next((a for a in authors if a.type == "human"), None)
+
+    if not human_author:
+        return HTMLResponse(content="<p class='text-gray-400'>No human user found</p>")
+
+    threads = store.count_dm_threads_with_metadata(human_author.id)
+
+    template = templates.env.get_template("dm_thread_item.html")
+    html_parts = []
+
+    # Determine selected bot if provided
+    selected_bot_id = UUID(bot_id) if bot_id else None
+
+    for thread in threads:
+        is_selected = selected_bot_id and thread["bot"].id == selected_bot_id
+        html = template.render(
+            request=request,
+            bot=thread["bot"],
+            last_message=thread["last_message"],
+            message_count=thread["message_count"],
+            unread=thread["unread"],
+            human_id=human_author.id,
+            is_selected=is_selected,
         )
         html_parts.append(html)
 
