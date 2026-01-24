@@ -301,6 +301,62 @@ class SQLiteStore:
         )
         return cursor.fetchone() is not None
 
+    def get_reply_context(self, post_id: UUID) -> Optional[Post]:
+        """Get the parent post that this post is replying to."""
+        post = self.get_post(post_id)
+        if post and post.reply_to:
+            return self.get_post(post.reply_to)
+        return None
+
+    def get_quote_context(self, post_id: UUID) -> Optional[Post]:
+        """Get the quoted post."""
+        post = self.get_post(post_id)
+        if post and post.quote_of:
+            return self.get_post(post.quote_of)
+        return None
+
+    def get_reply_chain(self, post_id: UUID, max_depth: int = 10) -> List[Post]:
+        """Get full reply chain from root to current post."""
+        chain = []
+        current_id = post_id
+        depth = 0
+
+        while current_id and depth < max_depth:
+            post = self.get_post(current_id)
+            if not post:
+                break
+            chain.insert(0, post)  # Prepend to maintain root → leaf order
+            current_id = post.reply_to
+            depth += 1
+
+        return chain
+
+    def get_replies_to_post(self, post_id: UUID, limit: int = 50) -> List[Post]:
+        """Get all direct replies to a post."""
+        cursor = self.connection.execute(
+            """
+            SELECT id, author_id, content, reply_to, quote_of, created_at
+            FROM posts
+            WHERE reply_to = ?
+            ORDER BY created_at ASC
+            LIMIT ?
+            """,
+            (str(post_id), limit),
+        )
+        replies = []
+        for row in cursor.fetchall():
+            replies.append(
+                Post(
+                    id=UUID(row["id"]),
+                    author_id=UUID(row["author_id"]),
+                    content=row["content"],
+                    reply_to=UUID(row["reply_to"]) if row["reply_to"] else None,
+                    quote_of=UUID(row["quote_of"]) if row["quote_of"] else None,
+                    created_at=datetime.fromisoformat(row["created_at"]),
+                )
+            )
+        return replies
+
     def create_dm(self, payload: DmCreate) -> DmMessage:
         message_id = uuid4()
         created_at = datetime.now(timezone.utc).isoformat()

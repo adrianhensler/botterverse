@@ -874,6 +874,22 @@ async def timeline_html(request: Request):
         author = store.get_author(post.author_id)
         if not author:
             continue
+
+        # Fetch parent/quoted context
+        parent_post = None
+        parent_author = None
+        if post.reply_to:
+            parent_post = store.get_reply_context(post.id)
+            if parent_post:
+                parent_author = store.get_author(parent_post.author_id)
+
+        quoted_post = None
+        quoted_author = None
+        if post.quote_of:
+            quoted_post = store.get_quote_context(post.id)
+            if quoted_post:
+                quoted_author = store.get_author(quoted_post.author_id)
+
         liked = human_author is not None and store.has_like(post.id, human_author.id)
         # Render template to string
         html = template.render(
@@ -882,6 +898,10 @@ async def timeline_html(request: Request):
             author=author,
             human_author=human_author,
             liked=liked,
+            parent_post=parent_post,
+            parent_author=parent_author,
+            quoted_post=quoted_post,
+            quoted_author=quoted_author,
         )
         html_parts.append(html)
 
@@ -925,6 +945,21 @@ async def create_post_html(request: Request):
     author = store.get_author(post.author_id)
     human_author = store.get_author(author_id)
 
+    # Fetch parent/quoted context
+    parent_post = None
+    parent_author = None
+    if post.reply_to:
+        parent_post = store.get_reply_context(post.id)
+        if parent_post:
+            parent_author = store.get_author(parent_post.author_id)
+
+    quoted_post = None
+    quoted_author = None
+    if post.quote_of:
+        quoted_post = store.get_quote_context(post.id)
+        if quoted_post:
+            quoted_author = store.get_author(quoted_post.author_id)
+
     # Get the template and render
     template = templates.env.get_template("post_card.html")
     html = template.render(
@@ -933,9 +968,65 @@ async def create_post_html(request: Request):
         author=author,
         human_author=human_author,
         liked=False,
+        parent_post=parent_post,
+        parent_author=parent_author,
+        quoted_post=quoted_post,
+        quoted_author=quoted_author,
     )
 
     return HTMLResponse(content=html)
+
+
+@app.get("/thread/{post_id}", response_class=HTMLResponse)
+async def thread_view(post_id: UUID, request: Request):
+    """Thread view page showing full conversation chain."""
+    post = store.get_post(post_id)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    chain = store.get_reply_chain(post_id)
+    replies = store.get_replies_to_post(post_id)
+
+    authors = store.list_authors()
+    human_author = next((a for a in authors if a.type == "human"), None)
+
+    chain_entries = []
+    for p in chain:
+        author = store.get_author(p.author_id)
+        if author:
+            liked = human_author is not None and store.has_like(p.id, human_author.id)
+            chain_entries.append({
+                "post": p,
+                "author": author,
+                "liked": liked,
+                "parent_post": None,  # Not needed in thread view
+                "parent_author": None,
+                "quoted_post": None,
+                "quoted_author": None,
+            })
+
+    reply_entries = []
+    for r in replies:
+        author = store.get_author(r.author_id)
+        if author:
+            liked = human_author is not None and store.has_like(r.id, human_author.id)
+            reply_entries.append({
+                "post": r,
+                "author": author,
+                "liked": liked,
+                "parent_post": None,
+                "parent_author": None,
+                "quoted_post": None,
+                "quoted_author": None,
+            })
+
+    return templates.TemplateResponse("thread.html", {
+        "request": request,
+        "human_author": human_author,
+        "main_post": post,
+        "chain": chain_entries,
+        "replies": reply_entries,
+    })
 
 
 @app.post("/api/posts/{post_id}/like-html", response_class=HTMLResponse)
