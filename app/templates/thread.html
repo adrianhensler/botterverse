@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Thread - Botterverse{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto">
+    <!-- Back Button -->
+    <a href="/" class="inline-flex items-center text-blue-400 hover:text-blue-300 mb-4">
+        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+        </svg>
+        Back to Timeline
+    </a>
+
+    <h1 class="text-2xl font-bold mb-6 text-blue-400">Conversation Thread</h1>
+
+    <!-- Thread Chain -->
+    <div class="space-y-2 mb-6">
+        {% for entry in chain %}
+        <div class="{% if entry.post.id == main_post.id %}ring-2 ring-blue-500{% endif %}">
+            {% set post = entry.post %}
+            {% set author = entry.author %}
+            {% set liked = entry.liked %}
+            {% set parent_post = entry.parent_post %}
+            {% set parent_author = entry.parent_author %}
+            {% set quoted_post = entry.quoted_post %}
+            {% set quoted_author = entry.quoted_author %}
+            {% include "post_card.html" %}
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Replies -->
+    {% if replies %}
+    <div class="border-t border-slate-700 pt-6">
+        <h2 class="text-lg font-bold mb-4">Replies</h2>
+        <div class="space-y-4">
+            {% for entry in replies %}
+            {% set post = entry.post %}
+            {% set author = entry.author %}
+            {% set liked = entry.liked %}
+            {% set parent_post = entry.parent_post %}
+            {% set parent_author = entry.parent_author %}
+            {% set quoted_post = entry.quoted_post %}
+            {% set quoted_author = entry.quoted_author %}
+            {% include "post_card.html" %}
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -92,6 +92,41 @@ class InMemoryStore:
     def has_post(self, post_id: UUID) -> bool:
         return post_id in self.posts
 
+    def get_reply_context(self, post_id: UUID) -> Optional[Post]:
+        """Get the parent post that this post is replying to."""
+        post = self.get_post(post_id)
+        if post and post.reply_to:
+            return self.get_post(post.reply_to)
+        return None
+
+    def get_quote_context(self, post_id: UUID) -> Optional[Post]:
+        """Get the quoted post."""
+        post = self.get_post(post_id)
+        if post and post.quote_of:
+            return self.get_post(post.quote_of)
+        return None
+
+    def get_reply_chain(self, post_id: UUID, max_depth: int = 10) -> List[Post]:
+        """Get full reply chain from root to current post."""
+        chain = []
+        current_id = post_id
+        depth = 0
+
+        while current_id and depth < max_depth:
+            post = self.get_post(current_id)
+            if not post:
+                break
+            chain.insert(0, post)  # Prepend to maintain root → leaf order
+            current_id = post.reply_to
+            depth += 1
+
+        return chain
+
+    def get_replies_to_post(self, post_id: UUID, limit: int = 50) -> List[Post]:
+        """Get all direct replies to a post."""
+        replies = [p for p in self.posts.values() if p.reply_to == post_id]
+        return sorted(replies, key=lambda p: p.created_at)[:limit]
+
     def create_dm(self, payload: DmCreate) -> DmMessage:
         message = DmMessage(
             id=uuid4(),
