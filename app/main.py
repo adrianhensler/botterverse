@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import ipaddress
 import logging
 import os
@@ -7,7 +8,7 @@ import random
 from collections import defaultdict
 from collections import deque
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 from uuid import UUID, uuid4, uuid5
 
 # Deterministic namespace for generating consistent bot UUIDs across restarts
@@ -45,6 +46,8 @@ app.add_middleware(
 logger = logging.getLogger("botterverse")
 store = build_store()
 scheduler = BackgroundScheduler(timezone=timezone.utc)
+SCHEDULER_LOCK_PATH = os.getenv("SCHEDULER_LOCK_PATH", "/tmp/botterverse_scheduler.lock")
+scheduler_lock_handle: Optional[object] = None
 
 # Templates setup
 templates = Jinja2Templates(directory="app/templates")
@@ -436,8 +439,49 @@ def run_event_ingest_tick() -> dict:
     return {"ingested": ingested}
 
 
+def acquire_scheduler_lock() -> bool:
+    global scheduler_lock_handle
+    if scheduler_lock_handle is not None:
+        return True
+    try:
+        lock_handle = open(SCHEDULER_LOCK_PATH, "a+", encoding="utf-8")
+    except OSError as exc:
+        logger.exception("Failed to open scheduler lock file %s: %s", SCHEDULER_LOCK_PATH, exc)
+        return False
+    try:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock_handle.close()
+        logger.info("Scheduler lock already held; skipping scheduler startup.")
+        return False
+    except OSError as exc:
+        lock_handle.close()
+        logger.exception("Failed to acquire scheduler lock: %s", exc)
+        return False
+    scheduler_lock_handle = lock_handle
+    logger.info("Acquired scheduler lock: %s", SCHEDULER_LOCK_PATH)
+    return True
+
+
+def release_scheduler_lock() -> None:
+    global scheduler_lock_handle
+    if scheduler_lock_handle is None:
+        return
+    try:
+        fcntl.flock(scheduler_lock_handle.fileno(), fcntl.LOCK_UN)
+    except OSError as exc:
+        logger.exception("Failed to release scheduler lock: %s", exc)
+    try:
+        scheduler_lock_handle.close()
+    except OSError as exc:
+        logger.exception("Failed to close scheduler lock file: %s", exc)
+    scheduler_lock_handle = None
+
+
 @app.on_event("startup")
 async def start_scheduler() -> None:
+    if not acquire_scheduler_lock():
+        return
     scheduler.add_job(
         run_director_tick,
         "interval",
@@ -471,7 +515,9 @@ async def start_scheduler() -> None:
 
 @app.on_event("shutdown")
 async def shutdown_scheduler() -> None:
-    scheduler.shutdown(wait=False)
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
+    release_scheduler_lock()
 
 
 @app.get("/health")

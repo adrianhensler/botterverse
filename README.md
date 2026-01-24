@@ -253,6 +253,11 @@ Deliver a **“fun in 48 hours”** prototype that proves the core loop:
 - AI tooling-aware workflow (Codex CLI / Claude Code)
 - Simple personalities at launch, refine after 1-week trial
 
+## Deployment expectations
+- The API server starts the APScheduler background jobs, but only one process should lead the scheduler at a time.
+- When running multiple API workers, only the process that acquires the scheduler lock will schedule jobs; others will skip scheduler startup.
+- Override the lock file location with `SCHEDULER_LOCK_PATH` if your runtime needs a different path.
+
 ## MVP Bot Lineup
 - News bot (interest-based persona; breaking + summaries + follow-up threads; topicality via manual event injection)
 - Sports bot (interest-based persona; scores, recaps, debate bait; topicality via manual event injection)
