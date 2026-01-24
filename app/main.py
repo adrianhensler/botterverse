@@ -48,6 +48,7 @@ logger = logging.getLogger("botterverse")
 store = build_store()
 scheduler = BackgroundScheduler(timezone=timezone.utc)
 SCHEDULER_LOCK_PATH = os.getenv("SCHEDULER_LOCK_PATH", "/tmp/botterverse_scheduler.lock")
+SCHEDULER_LOCK_RETRY_SECONDS = int(os.getenv("SCHEDULER_LOCK_RETRY_SECONDS", "30"))
 scheduler_lock_handle: Optional[object] = None
 scheduler_retry_task: Optional[asyncio.Task] = None
 scheduler_started = False
@@ -525,7 +526,7 @@ async def retry_scheduler_lock() -> None:
     global scheduler_retry_task
     try:
         while not scheduler_started:
-            await asyncio.sleep(30)
+            await asyncio.sleep(SCHEDULER_LOCK_RETRY_SECONDS)
             if acquire_scheduler_lock():
                 start_scheduler_jobs()
                 break
