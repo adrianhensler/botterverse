@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import ipaddress
 import logging
 import os
@@ -11,6 +10,8 @@ from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Set
 from uuid import UUID, uuid4, uuid5
+
+from filelock import FileLock, Timeout
 
 # Deterministic namespace for generating consistent bot UUIDs across restarts
 BOTTERVERSE_NAMESPACE = UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
@@ -47,9 +48,9 @@ app.add_middleware(
 logger = logging.getLogger("botterverse")
 store = build_store()
 scheduler = BackgroundScheduler(timezone=timezone.utc)
-SCHEDULER_LOCK_PATH = os.getenv("SCHEDULER_LOCK_PATH", "/tmp/botterverse_scheduler.lock")
+SCHEDULER_LOCK_PATH = os.getenv("SCHEDULER_LOCK_PATH", "data/scheduler.lock")
 SCHEDULER_LOCK_RETRY_SECONDS = int(os.getenv("SCHEDULER_LOCK_RETRY_SECONDS", "30"))
-scheduler_lock_handle: Optional[object] = None
+scheduler_lock_handle: Optional[FileLock] = None
 scheduler_retry_task: Optional[asyncio.Task] = None
 scheduler_started = False
 
@@ -448,23 +449,17 @@ def acquire_scheduler_lock() -> bool:
     if scheduler_lock_handle is not None:
         return True
     try:
-        lock_handle = open(SCHEDULER_LOCK_PATH, "a+", encoding="utf-8")
-    except OSError as exc:
-        logger.exception("Failed to open scheduler lock file %s: %s", SCHEDULER_LOCK_PATH, exc)
-        return False
-    try:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        lock_handle.close()
+        lock = FileLock(SCHEDULER_LOCK_PATH, timeout=0)  # Non-blocking
+        lock.acquire()
+        scheduler_lock_handle = lock
+        logger.info("Acquired scheduler lock: %s", SCHEDULER_LOCK_PATH)
+        return True
+    except Timeout:
         logger.info("Scheduler lock already held; skipping scheduler startup.")
         return False
     except OSError as exc:
-        lock_handle.close()
         logger.exception("Failed to acquire scheduler lock: %s", exc)
         return False
-    scheduler_lock_handle = lock_handle
-    logger.info("Acquired scheduler lock: %s", SCHEDULER_LOCK_PATH)
-    return True
 
 
 def release_scheduler_lock() -> None:
@@ -472,13 +467,9 @@ def release_scheduler_lock() -> None:
     if scheduler_lock_handle is None:
         return
     try:
-        fcntl.flock(scheduler_lock_handle.fileno(), fcntl.LOCK_UN)
-    except OSError as exc:
+        scheduler_lock_handle.release()
+    except Exception as exc:
         logger.exception("Failed to release scheduler lock: %s", exc)
-    try:
-        scheduler_lock_handle.close()
-    except OSError as exc:
-        logger.exception("Failed to close scheduler lock file: %s", exc)
     scheduler_lock_handle = None
 
 
@@ -548,6 +539,10 @@ async def start_scheduler() -> None:
 async def shutdown_scheduler() -> None:
     if scheduler_retry_task is not None:
         scheduler_retry_task.cancel()
+        try:
+            await scheduler_retry_task
+        except asyncio.CancelledError:
+            pass
     if scheduler.running:
         scheduler.shutdown(wait=False)
     release_scheduler_lock()
