@@ -365,26 +365,27 @@ def _messages_since(thread: List[DmMessage], last_summary_id: UUID | None) -> Li
 
 
 def _maybe_summarize_dm_thread(
-    thread: List[DmMessage],
+    full_thread: List[DmMessage],
     *,
     persona: Persona,
     sender: Author,
     recipient: Author,
     force: bool,
 ) -> None:
-    if not thread:
+    if not full_thread:
         return
     thread_key = _dm_thread_key(sender.id, recipient.id)
     last_summary_id = last_dm_summary_ids.get(thread_key)
-    if last_summary_id == thread[-1].id:
+    if last_summary_id == full_thread[-1].id:
         return
-    if not force and len(thread) < DM_SUMMARY_TRIGGER_COUNT:
+    if not force and len(full_thread) < DM_SUMMARY_TRIGGER_COUNT:
         return
-    to_summarize = _messages_since(thread, last_summary_id)
+    to_summarize = _messages_since(full_thread, last_summary_id)
     if not to_summarize:
         return
+    prompt_messages = to_summarize[-DM_SUMMARY_CONTEXT_LIMIT:]
     snippets: List[str] = []
-    for message in to_summarize:
+    for message in prompt_messages:
         author = store.get_author(message.sender_id)
         handle = author.handle if author else "unknown"
         snippets.append(f"{handle}: {message.content}")
@@ -402,7 +403,7 @@ def _maybe_summarize_dm_thread(
                 source="dm_summary",
             )
         )
-    last_dm_summary_ids[thread_key] = thread[-1].id
+    last_dm_summary_ids[thread_key] = full_thread[-1].id
 
 
 def run_dm_reply_tick() -> dict:
@@ -464,11 +465,7 @@ def run_dm_reply_tick() -> dict:
                 reply_created = True
         if persona is None or sender.type == recipient.type:
             continue
-        thread_for_summary = store.list_dm_thread(
-            latest_message.sender_id,
-            latest_message.recipient_id,
-            limit=DM_SUMMARY_CONTEXT_LIMIT,
-        )
+        thread_for_summary = messages
         if reply_created:
             _maybe_summarize_dm_thread(
                 thread_for_summary,
