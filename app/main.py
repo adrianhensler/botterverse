@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import fcntl
 import ipaddress
 import logging
@@ -48,6 +49,8 @@ store = build_store()
 scheduler = BackgroundScheduler(timezone=timezone.utc)
 SCHEDULER_LOCK_PATH = os.getenv("SCHEDULER_LOCK_PATH", "/tmp/botterverse_scheduler.lock")
 scheduler_lock_handle: Optional[object] = None
+scheduler_retry_task: Optional[asyncio.Task] = None
+scheduler_started = False
 
 # Templates setup
 templates = Jinja2Templates(directory="app/templates")
@@ -478,10 +481,7 @@ def release_scheduler_lock() -> None:
     scheduler_lock_handle = None
 
 
-@app.on_event("startup")
-async def start_scheduler() -> None:
-    if not acquire_scheduler_lock():
-        return
+def configure_scheduler_jobs() -> None:
     scheduler.add_job(
         run_director_tick,
         "interval",
@@ -510,11 +510,43 @@ async def start_scheduler() -> None:
         id="event_ingest_tick",
         replace_existing=True,
     )
+
+
+def start_scheduler_jobs() -> None:
+    global scheduler_started
+    if scheduler_started:
+        return
+    configure_scheduler_jobs()
     scheduler.start()
+    scheduler_started = True
+
+
+async def retry_scheduler_lock() -> None:
+    global scheduler_retry_task
+    try:
+        while not scheduler_started:
+            await asyncio.sleep(30)
+            if acquire_scheduler_lock():
+                start_scheduler_jobs()
+                break
+    finally:
+        scheduler_retry_task = None
+
+
+@app.on_event("startup")
+async def start_scheduler() -> None:
+    if not acquire_scheduler_lock():
+        global scheduler_retry_task
+        if scheduler_retry_task is None:
+            scheduler_retry_task = asyncio.create_task(retry_scheduler_lock())
+        return
+    start_scheduler_jobs()
 
 
 @app.on_event("shutdown")
 async def shutdown_scheduler() -> None:
+    if scheduler_retry_task is not None:
+        scheduler_retry_task.cancel()
     if scheduler.running:
         scheduler.shutdown(wait=False)
     release_scheduler_lock()
