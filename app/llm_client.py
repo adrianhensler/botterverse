@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Sequence
 
-from .llm_prompts import build_dm_summary_prompt, build_prompt
+from .llm_prompts import build_dm_summary_prompt, build_prompt, build_reply_decision_prompt
 
 logger = logging.getLogger("botterverse.llm")
 from .llm_types import LlmContext, PersonaLike
@@ -70,6 +71,70 @@ def generate_post_with_audit(persona: PersonaLike, context: Mapping[str, object]
         return LlmResult(prompt=prompt, output=output, model_name=MODEL_NAME, used_fallback=True)
 
 
+def decide_reply(
+    persona: PersonaLike,
+    post_content: str,
+    post_author: str,
+    author_type: str,
+    is_direct_reply: bool,
+    recent_timeline: Sequence[str],
+) -> tuple[bool, str]:
+    """Ask LLM if persona should reply to this post.
+
+    Returns:
+        (should_reply, reasoning) tuple
+    """
+    prompt = build_reply_decision_prompt(
+        persona,
+        post_content,
+        post_author,
+        author_type,
+        is_direct_reply,
+        recent_timeline,
+    )
+
+    # Always use economy tier (gpt-4o-mini) for decision-making to reduce costs
+    try:
+        # Get the economy adapter from router
+        economy_route = _DEFAULT_ROUTER.economy_route()
+        adapter = _DEFAULT_ROUTER.adapter_for(economy_route.provider)
+
+        # Build a minimal context for the decision call
+        decision_context = LlmContext(
+            latest_event_topic=post_content[:100],
+            recent_timeline_snippets=recent_timeline,
+            event_context="",
+            persona_memories=[],
+        )
+
+        response = adapter.generate(
+            persona,
+            decision_context,
+            prompt,
+            economy_route.model_name,
+        )
+
+        # Parse JSON response
+        content = response.strip()
+
+        # Try to extract JSON if wrapped in markdown
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+
+        result = json.loads(content)
+        should_reply = bool(result.get("should_reply", False))
+        reasoning = str(result.get("reasoning", "No reasoning provided"))
+
+        return (should_reply, reasoning)
+
+    except Exception as e:
+        # On error, default to no reply with error reasoning
+        logger.warning("Reply decision error: %s", e)
+        return (False, f"Decision error: {str(e)}")
+
+
 def generate_dm_summary_with_audit(
     persona: PersonaLike,
     thread_snippets: Sequence[str],
@@ -112,11 +177,17 @@ def _coerce_context(context: Mapping[str, object]) -> LlmContext:
     memories_raw = context.get("persona_memories", [])
     recent_snippets = _string_list(snippets_raw)
     persona_memories = _string_list(memories_raw)
+    reply_to_post = str(context.get("reply_to_post", ""))
+    quote_of_post = str(context.get("quote_of_post", ""))
+    decision_reasoning = str(context.get("decision_reasoning", ""))
     return LlmContext(
         latest_event_topic=latest_event_topic,
         recent_timeline_snippets=recent_snippets,
         event_context=event_context,
         persona_memories=persona_memories,
+        reply_to_post=reply_to_post,
+        quote_of_post=quote_of_post,
+        decision_reasoning=decision_reasoning,
     )
 
 
