@@ -69,7 +69,13 @@ class BotDirector:
             self.events.append(event)
             self._schedule_reactions(event)
 
-    def next_posts(self, now: datetime, recent_posts: Sequence[Post]) -> List[PlannedPost]:
+    def next_posts(
+        self,
+        now: datetime,
+        recent_posts: Sequence[Post],
+        store: object | None = None,
+        llm_client: object | None = None,
+    ) -> List[PlannedPost]:
         planned: List[PlannedPost] = []
         latest_event = self._latest_event()
         latest_topic = latest_event.topic if latest_event else "the timeline"
@@ -88,7 +94,9 @@ class BotDirector:
                 elapsed = now - last_posted_at
                 if elapsed < self._jittered_cadence(cadence_window):
                     continue
-            reply_payload = self._maybe_plan_reply(persona, latest_topic, recent_snippets, recent_posts)
+            reply_payload = self._maybe_plan_reply(
+                persona, latest_topic, recent_snippets, recent_posts, store, llm_client
+            )
             if reply_payload is not None:
                 planned.append(reply_payload)
                 self.last_posted_at[persona.id] = now
@@ -154,36 +162,98 @@ class BotDirector:
         latest_topic: str,
         recent_snippets: Sequence[str],
         recent_posts: Sequence[Post],
+        store: object | None,
+        llm_client: object | None,
     ) -> PlannedPost | None:
-        if random.random() > self.REPLY_PROBABILITY:
+        """Consider replying to posts using LLM-based decision making."""
+        if store is None or llm_client is None:
             return None
-        candidates = self._eligible_reply_targets(persona, recent_posts)
+
+        candidates = self._eligible_reply_targets(persona, recent_posts, store)
         if not candidates:
             return None
-        target = random.choice(candidates)
-        latest_event = self._latest_event()
-        use_quote = random.random() < self.QUOTE_PROBABILITY
-        memories = self._persona_memories(persona.id)
-        context = {
-            "latest_event_topic": target.content or latest_topic,
-            "recent_timeline_snippets": [target.content, *recent_snippets],
-            "reply_to_post": "" if use_quote else target.content,
-            "quote_of_post": target.content if use_quote else "",
-            "event_context": self._event_context(latest_event) if latest_event else "",
-            "event_payload": latest_event.payload if latest_event else {},
-            "persona_memories": memories,
-        }
-        self.replied_post_ids[persona.id].add(target.id)
-        output, audit_entry = self._generate_post_content(persona, context)
-        return PlannedPost(
-            payload=PostCreate(
-                author_id=persona.id,
-                content=output,
-                reply_to=None if use_quote else target.id,
-                quote_of=target.id if use_quote else None,
-            ),
-            audit_entry=audit_entry,
-        )
+
+        # Prioritize: direct replies first, then human posts, then bot posts
+        def priority(item):
+            post, author, is_direct = item
+            if is_direct:
+                return 0  # Highest priority
+            elif author.type == "human":
+                return 1  # Second priority
+            else:
+                return 2  # Lowest priority
+
+        candidates.sort(key=priority)
+
+        # Ask LLM for each candidate until one says "yes"
+        for target_post, target_author, is_direct_reply in candidates:
+            # Get recent timeline for context
+            timeline_snippets = [p.content for p in recent_posts[:5]]
+
+            # Ask LLM: should I reply?
+            from . import llm_client as llm_module
+
+            should_reply, reasoning = llm_module.decide_reply(
+                persona=persona,
+                post_content=target_post.content,
+                post_author=target_author.handle,
+                author_type=target_author.type,
+                is_direct_reply=is_direct_reply,
+                recent_timeline=timeline_snippets,
+            )
+
+            # Store consideration as memory (regardless of decision)
+            memory_content = (
+                f"Considered replying to @{target_author.handle} "
+                f"({'human' if target_author.type == 'human' else 'bot'}) "
+                f'about: "{target_post.content[:100]}..."\n'
+                f"Decision: {'REPLY' if should_reply else 'SKIP'}. "
+                f"Reasoning: {reasoning}"
+            )
+
+            store.add_memory_from_event(
+                persona_id=persona.id,
+                topic=memory_content,
+                tags=["reply_consideration", target_author.type],
+                salience=0.7 if should_reply else 0.5,
+            )
+
+            # If LLM said yes, plan the reply
+            if should_reply:
+                # Mark as replied to prevent duplicates
+                self.replied_post_ids[persona.id].add(target_post.id)
+
+                # Decide: threaded reply or quote post
+                use_quote = random.random() < self.QUOTE_PROBABILITY
+
+                # Build context for reply generation
+                latest_event = self._latest_event()
+                memories = self._persona_memories(persona.id)
+
+                context = {
+                    "latest_event_topic": target_post.content or latest_topic,
+                    "recent_timeline_snippets": [target_post.content, *recent_snippets],
+                    "reply_to_post": "" if use_quote else target_post.content,
+                    "quote_of_post": target_post.content if use_quote else "",
+                    "event_context": self._event_context(latest_event) if latest_event else "",
+                    "event_payload": latest_event.payload if latest_event else {},
+                    "persona_memories": memories,
+                    "decision_reasoning": reasoning,  # NEW: include why we're replying
+                }
+
+                output, audit_entry = self._generate_post_content(persona, context)
+                return PlannedPost(
+                    payload=PostCreate(
+                        author_id=persona.id,
+                        content=output,
+                        reply_to=None if use_quote else target_post.id,
+                        quote_of=target_post.id if use_quote else None,
+                    ),
+                    audit_entry=audit_entry,
+                )
+
+        # No candidate resulted in a reply
+        return None
 
     def _generate_post_content(self, persona: Persona, context: Dict[str, object]) -> tuple[str, AuditEntry]:
         result = generate_post_with_audit(persona, context)
@@ -200,15 +270,46 @@ class BotDirector:
         self,
         persona: Persona,
         recent_posts: Sequence[Post],
-    ) -> List[Post]:
+        store: object | None,
+    ) -> List[tuple[Post, object, bool]]:
+        """Fast filter for posts worth considering.
+
+        Returns:
+            List of (post, author, is_direct_reply) tuples
+        """
+        if store is None:
+            return []
+
         seen_posts = self.replied_post_ids[persona.id]
-        return [
-            post
-            for post in recent_posts
-            if post.author_id != persona.id
-            if post.id not in seen_posts
-            if self._post_matches_interests(persona, post)
-        ]
+        candidates = []
+
+        for post in recent_posts:
+            # Always skip own posts and already-replied posts
+            if post.author_id == persona.id:
+                continue
+            if post.id in seen_posts:
+                continue
+
+            author = store.get_author(post.author_id)
+            if not author:
+                continue
+
+            # Check if this is a direct reply to THIS bot
+            is_direct_reply = False
+            if post.reply_to:
+                parent = store.get_post(post.reply_to)
+                if parent and parent.author_id == persona.id:
+                    is_direct_reply = True
+
+            # Filtering logic:
+            # - Human posts: Always consider (bypass interest matching)
+            # - Bot posts: Only if interests match (more selective)
+            if author.type == "human":
+                candidates.append((post, author, is_direct_reply))
+            elif author.type == "bot" and self._post_matches_interests(persona, post):
+                candidates.append((post, author, is_direct_reply))
+
+        return candidates
 
     def _post_matches_interests(self, persona: Persona, post: Post) -> bool:
         if not persona.interests:

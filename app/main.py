@@ -30,6 +30,7 @@ from .integrations.news import fetch_news_events
 from .integrations.sports import fetch_sports_events
 from .integrations.weather import fetch_weather_events
 from .export_utils import attach_signature, verify_signature
+from . import llm_client
 from .llm_client import generate_dm_summary_with_audit, generate_post_with_audit
 from .models import (
     AuditEntry,
@@ -341,7 +342,7 @@ def run_director_tick() -> dict:
         return {"created": [], "paused": True}
     now = datetime.now(timezone.utc)
     recent_posts = store.list_posts(limit=50)
-    planned = bot_director.next_posts(now, recent_posts)
+    planned = bot_director.next_posts(now, recent_posts, store, llm_client)
     created: List[Post] = []
     for planned_post in planned:
         created_post = store.create_post(planned_post.payload)

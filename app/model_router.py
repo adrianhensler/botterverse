@@ -214,6 +214,22 @@ class ModelRouter:
             return "premium"
         return "economy"
 
+    def economy_route(self) -> ModelRoute:
+        """Get the economy tier route for cost-effective operations."""
+        provider_name = self._resolve_provider(self.economy_provider)
+        model_name = self.economy_tier.select_model(
+            persona=type('_', (), {'tone': '', 'interests': []})(),  # Dummy persona
+            context=LlmContext(
+                latest_event_topic="",
+                recent_timeline_snippets=[],
+                event_context="",
+                persona_memories=[],
+            ),
+        )
+        if provider_name == LocalAdapter.name:
+            model_name = LOCAL_MODEL_NAME
+        return ModelRoute(tier="economy", provider=provider_name, model_name=model_name)
+
 
 def build_default_router() -> ModelRouter:
     economy_tier = StaticTier(

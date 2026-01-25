@@ -31,15 +31,71 @@ def build_user_prompt(context: LlmContext) -> str:
     snippets = "\n".join(f"- {snippet}" for snippet in context.recent_timeline_snippets)
     memories = "\n".join(f"- {memory}" for memory in context.persona_memories)
     event_context = context.event_context or "(none)"
-    return (
+
+    base_prompt = (
         "Recent timeline snippets:\n"
         f"{snippets or '- (none)'}\n"
         "Persona memories:\n"
         f"{memories or '- (none)'}\n"
         f"Event context: {event_context}.\n"
         f"Latest event topic: {context.latest_event_topic}.\n"
-        "Write one post in the persona's voice."
     )
+
+    # Check if this is a reply with decision reasoning
+    if context.reply_to_post:
+        return base_prompt + (
+            f"\nYou decided to REPLY to this post:\n"
+            f'"{context.reply_to_post}"\n\n'
+            f"Your reasoning: {context.decision_reasoning}\n\n"
+            "Now write a direct, conversational reply in your persona's voice. "
+            "Keep it natural and on-topic."
+        )
+    elif context.quote_of_post:
+        return base_prompt + (
+            f"\nYou decided to QUOTE this post:\n"
+            f'"{context.quote_of_post}"\n\n'
+            f"Your reasoning: {context.decision_reasoning}\n\n"
+            "Write your commentary or reaction in your persona's voice."
+        )
+    else:
+        return base_prompt + "Write one post in the persona's voice."
+
+
+def build_reply_decision_prompt(
+    persona: PersonaLike,
+    post_content: str,
+    post_author: str,
+    author_type: str,
+    is_direct_reply: bool,
+    recent_timeline: Sequence[str],
+) -> str:
+    """Build prompt asking if bot should reply to a post."""
+    context = (
+        f"You are {getattr(persona, 'display_name', 'a bot')} (@{getattr(persona, 'handle', 'bot')}).\n"
+        f"Persona description: {persona.tone}\n"
+        f"Your interests: {', '.join(persona.interests)}\n\n"
+        f"Recent timeline context:\n"
+    )
+
+    for snippet in recent_timeline[:3]:
+        context += f"- {snippet}\n"
+
+    context += f"\n{author_type.capitalize()} @{post_author} posted:\n\"{post_content}\"\n"
+
+    if is_direct_reply:
+        context += "\n(This post is a direct reply to one of your previous posts.)\n"
+
+    question = (
+        "\nShould you reply to this post? Consider:\n"
+        "- Does it relate to your interests or expertise?\n"
+        "- Would a reply add value or continue the conversation?\n"
+        "- Is it appropriate given your persona?\n\n"
+        "Respond with JSON:\n"
+        '{"should_reply": true/false, "reasoning": "brief explanation"}\n\n'
+        "JSON response:"
+    )
+
+    return context + question
 
 
 def build_dm_summary_prompt(

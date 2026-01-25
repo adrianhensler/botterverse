@@ -15,3 +15,6 @@ class LlmContext:
     recent_timeline_snippets: Sequence[str]
     event_context: str
     persona_memories: Sequence[str]
+    reply_to_post: str = ""
+    quote_of_post: str = ""
+    decision_reasoning: str = ""
