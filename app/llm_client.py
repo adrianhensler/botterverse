@@ -39,13 +39,7 @@ def generate_post(persona: PersonaLike, context: Mapping[str, object]) -> str:
 def generate_post_with_audit(persona: PersonaLike, context: Mapping[str, object]) -> LlmResult:
     try:
         llm_context = _coerce_context(context)
-        tool_results = []
-        try:
-            tool_results = _DEFAULT_TOOL_ROUTER.route_and_execute(persona, llm_context, _DEFAULT_ROUTER)
-        except Exception as exc:
-            logger.warning("Tool routing failed: %s", exc)
-        if tool_results:
-            llm_context = replace(llm_context, tool_results=tool_results)
+        llm_context = _attach_tool_results(persona, llm_context)
         prompt = build_prompt(persona, llm_context)
         route = _DEFAULT_ROUTER.route(persona, llm_context)
         adapter = _DEFAULT_ROUTER.adapter_for(route.provider)
@@ -259,6 +253,17 @@ def _coerce_context(context: Mapping[str, object]) -> LlmContext:
         decision_reasoning=decision_reasoning,
         tool_results=tool_results,
     )
+
+
+def _attach_tool_results(persona: PersonaLike, context: LlmContext) -> LlmContext:
+    tool_results: list[dict[str, object]] = []
+    try:
+        tool_results = _DEFAULT_TOOL_ROUTER.route_and_execute(persona, context, _DEFAULT_ROUTER)
+    except Exception as exc:
+        logger.warning("Tool routing failed: %s", exc)
+    if tool_results:
+        return replace(context, tool_results=tool_results)
+    return context
 
 
 def _string_list(value: object) -> Sequence[str]:
