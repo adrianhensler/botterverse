@@ -13,15 +13,13 @@ from typing import Callable, Mapping, Sequence
 import requests
 
 from .integrations.news import get_news_provider, search_news
-from .integrations.weather import fetch_weather, normalize_weather_units, validate_weather_location
+from .integrations.weather import fetch_weather_with_retry, normalize_weather_units, validate_weather_location
 from .llm_prompts import build_tool_selection_prompt
 from .llm_types import LlmContext, PersonaLike
 from .model_router import ModelRouter
 
 LOCAL_PROVIDER_NAME = "local-stub"
-WEATHER_RATE_LIMIT_SECONDS = int(os.getenv("WEATHER_RATE_LIMIT_SECONDS", "60"))
 WEATHER_TIMEOUT_SECONDS = float(os.getenv("WEATHER_TIMEOUT_SECONDS", "8"))
-_LAST_WEATHER_CALL: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -327,37 +325,57 @@ def _current_time_handler(tool_input: Mapping[str, object]) -> Mapping[str, str]
 
 
 def _weather_handler(tool_input: Mapping[str, object]) -> Mapping[str, object]:
-    global _LAST_WEATHER_CALL
     api_key = os.getenv("OPENWEATHER_API_KEY", "")
     if not api_key:
         raise ValueError("weather API key not configured")
+
     location_raw = str(tool_input.get("location", ""))
-    location = validate_weather_location(location_raw)
     units = normalize_weather_units(str(tool_input.get("units", "")))
     timeout = tool_input.get("timeout_s", WEATHER_TIMEOUT_SECONDS)
+
     try:
         timeout_value = float(timeout)
     except (TypeError, ValueError):
         timeout_value = WEATHER_TIMEOUT_SECONDS
     timeout_value = max(1.0, min(timeout_value, 20.0))
-    now = datetime.now(timezone.utc)
-    if _LAST_WEATHER_CALL is not None and WEATHER_RATE_LIMIT_SECONDS > 0:
-        elapsed = (now - _LAST_WEATHER_CALL).total_seconds()
-        if elapsed < WEATHER_RATE_LIMIT_SECONDS:
+
+    # Fetch with retry (includes per-location caching)
+    weather, attempted_formats, error_type = fetch_weather_with_retry(
+        api_key, location_raw, units=units, timeout_s=timeout_value
+    )
+
+    if not weather:
+        # Return appropriate error based on failure type
+        if error_type == "auth_error":
             return {
-                "status": "rate_limited",
-                "retry_after_s": round(WEATHER_RATE_LIMIT_SECONDS - elapsed, 2),
-                "location": location,
+                "status": "auth_error",
+                "message": "Weather API key is invalid or not configured",
+                "location": location_raw,
                 "units": units,
             }
-    _LAST_WEATHER_CALL = now
-    weather = fetch_weather(api_key, location, units=units, timeout_s=timeout_value)
-    if not weather:
-        return {
-            "status": "unavailable",
-            "location": location,
-            "units": units,
-        }
+        elif error_type == "rate_limited":
+            return {
+                "status": "rate_limited",
+                "message": "Weather API rate limit exceeded, try again later",
+                "location": location_raw,
+                "units": units,
+            }
+        elif error_type == "not_found":
+            return {
+                "status": "location_not_found",
+                "location": location_raw,
+                "attempted_formats": attempted_formats,
+                "suggestion": "Try specifying city and country (e.g., 'Halifax, Canada' or 'New York, US')",
+                "units": units,
+            }
+        else:  # unavailable
+            return {
+                "status": "unavailable",
+                "message": "Weather service temporarily unavailable (network error or server issue)",
+                "location": location_raw,
+                "units": units,
+            }
+
     return {"status": "ok", **weather}
 
 

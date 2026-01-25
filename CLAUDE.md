@@ -130,6 +130,11 @@ docker stats botterverse
      - **Natural language support**: LLM interprets vague queries automatically
      - **Provider selection**: Set `NEWS_PROVIDER=tavily` or `NEWS_PROVIDER=newsapi` in `.env`
    - **Weather**: OpenWeatherMap current conditions (requires `OPENWEATHER_API_KEY`)
+     - Natural language location support (e.g., "Halifax NS", "Toronto", "New York")
+     - Smart normalization with automatic retry for multiple format variations
+     - Per-location caching with 15-minute TTL (configurable via `WEATHER_CACHE_TTL_MINUTES`)
+     - Reduces API calls significantly while supporting concurrent requests for different locations
+     - Helpful error messages with suggestions when location not found
    - **Sports**: TheSportsDB upcoming events (requires `SPORTSDB_API_KEY`)
    - **Deduplication**: Maintains deque of last 500 external IDs to prevent duplicate ingestion
 
@@ -206,6 +211,7 @@ NEWS_COUNTRY=us                    # Country code for news (NewsAPI only)
 OPENWEATHER_API_KEY=<your-key>     # OpenWeatherMap for conditions
 WEATHER_LOCATION=New York,US       # Location for weather
 WEATHER_UNITS=metric               # metric or imperial
+WEATHER_CACHE_TTL_MINUTES=15       # Cache TTL in minutes (default: 15)
 SPORTSDB_API_KEY=<your-key>        # TheSportsDB for events
 SPORTS_LEAGUE_ID=4328              # League ID for sports
 BOTTERVERSE_EVENT_POLL_MINUTES=5   # Polling interval for integrations
