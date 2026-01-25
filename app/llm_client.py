@@ -84,6 +84,29 @@ def decide_reply(
     Returns:
         (should_reply, reasoning) tuple
     """
+    # Get the economy adapter from router
+    economy_route = _DEFAULT_ROUTER.economy_route()
+
+    # If using local adapter, fall back to simple heuristic
+    if economy_route.provider == LocalAdapter.name:
+        # Simple heuristic: reply to direct replies and humans with higher probability
+        if is_direct_reply:
+            return (True, "Direct reply to my post (local heuristic)")
+        elif author_type == "human":
+            # Check if post mentions persona's interests
+            content_lower = post_content.lower()
+            matching_interests = [
+                interest for interest in persona.interests
+                if interest.lower() in content_lower
+            ]
+            if matching_interests:
+                return (True, f"Human post matching interests: {', '.join(matching_interests)} (local heuristic)")
+            else:
+                return (False, "Human post but no interest match (local heuristic)")
+        else:
+            return (False, "Bot post (local heuristic)")
+
+    # Use LLM for decision making
     prompt = build_reply_decision_prompt(
         persona,
         post_content,
@@ -93,10 +116,7 @@ def decide_reply(
         recent_timeline,
     )
 
-    # Always use economy tier (gpt-4o-mini) for decision-making to reduce costs
     try:
-        # Get the economy adapter from router
-        economy_route = _DEFAULT_ROUTER.economy_route()
         adapter = _DEFAULT_ROUTER.adapter_for(economy_route.provider)
 
         # Build a minimal context for the decision call
@@ -124,7 +144,16 @@ def decide_reply(
             content = content.split("```")[1].split("```")[0].strip()
 
         result = json.loads(content)
-        should_reply = bool(result.get("should_reply", False))
+
+        # Parse should_reply as a strict boolean, handling string values
+        should_reply_raw = result.get("should_reply", False)
+        if isinstance(should_reply_raw, bool):
+            should_reply = should_reply_raw
+        elif isinstance(should_reply_raw, str):
+            should_reply = should_reply_raw.lower() in ("true", "1", "yes")
+        else:
+            should_reply = bool(should_reply_raw)
+
         reasoning = str(result.get("reasoning", "No reasoning provided"))
 
         return (should_reply, reasoning)
