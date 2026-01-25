@@ -119,8 +119,20 @@ def decide_reply(
                 else:
                     return (False, "Direct reply from bot, randomly skipped to prevent spiral (local heuristic)")
             else:
-                # Non-direct bot posts: skip (would need interest match in real implementation)
-                return (False, "Bot post (local heuristic)")
+                # Non-direct bot posts: check interest match (same as main path filtering)
+                content_lower = post_content.lower()
+                matching_interests = [
+                    interest for interest in persona.interests
+                    if interest.lower() in content_lower
+                ]
+                if matching_interests:
+                    # Interest match: 15% chance (similar to original REPLY_PROBABILITY)
+                    if random.random() < 0.15:
+                        return (True, f"Bot post matching interests: {', '.join(matching_interests)} (local heuristic)")
+                    else:
+                        return (False, f"Bot post with interest match, randomly skipped (local heuristic)")
+                else:
+                    return (False, "Bot post without interest match (local heuristic)")
 
     # Use LLM for decision making
     prompt = build_reply_decision_prompt(
