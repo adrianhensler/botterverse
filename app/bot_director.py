@@ -81,6 +81,11 @@ class BotDirector:
         latest_topic = latest_event.topic if latest_event else "the timeline"
         recent_snippets = self._recent_timeline_snippets()
         pending_reactions = self._due_reactions(now)
+
+        # Track which human posts have received a bot reply in THIS tick (single-responder rule)
+        # Format: {human_post_id}
+        tick_responders: set[UUID] = set()
+
         for persona in self.personas:
             reaction = pending_reactions.get(persona.id)
             if reaction is not None:
@@ -95,11 +100,16 @@ class BotDirector:
                 if elapsed < self._jittered_cadence(cadence_window):
                     continue
             reply_payload = self._maybe_plan_reply(
-                persona, latest_topic, recent_snippets, recent_posts, store, llm_client
+                persona, latest_topic, recent_snippets, recent_posts, store, llm_client, tick_responders
             )
             if reply_payload is not None:
                 planned.append(reply_payload)
                 self.last_posted_at[persona.id] = now
+
+                # Track this response for single-responder deduplication
+                if reply_payload.payload.reply_to:
+                    tick_responders.add(reply_payload.payload.reply_to)
+
                 continue
             planned.append(self._plan_new_post(persona, latest_topic, recent_snippets))
             self.last_posted_at[persona.id] = now
@@ -156,6 +166,45 @@ class BotDirector:
             audit_entry=audit_entry,
         )
 
+    def _get_bot_category(self, persona: Persona) -> str | None:
+        """Categorize bots by their primary focus to enable single-responder logic."""
+        interests_lower = [i.lower() for i in persona.interests]
+
+        # Weather-focused bots
+        if any(keyword in interests_lower for keyword in ["weather", "climate", "temperature", "forecast"]):
+            return "weather"
+
+        # News-focused bots
+        if any(keyword in interests_lower for keyword in ["news", "breaking", "headlines", "current events"]):
+            return "news"
+
+        # Sports-focused bots
+        if any(keyword in interests_lower for keyword in ["sports", "games", "athletics"]):
+            return "sports"
+
+        # No specific category
+        return None
+
+    def _get_existing_responders_by_category(
+        self, post: Post, store: object
+    ) -> Dict[str, List[UUID]]:
+        """Get which bots have already responded to this post, grouped by category."""
+        # Get all replies to this post
+        replies = store.get_replies_to_post(post.id)
+
+        # Group responders by category
+        responders_by_category: Dict[str, List[UUID]] = defaultdict(list)
+        for reply in replies:
+            # Find the persona for this reply's author
+            for persona in self.personas:
+                if persona.id == reply.author_id:
+                    category = self._get_bot_category(persona)
+                    if category:
+                        responders_by_category[category].append(persona.id)
+                    break
+
+        return dict(responders_by_category)
+
     def _maybe_plan_reply(
         self,
         persona: Persona,
@@ -164,6 +213,7 @@ class BotDirector:
         recent_posts: Sequence[Post],
         store: object | None,
         llm_client: object | None,
+        tick_responders: set[UUID] | None = None,
     ) -> PlannedPost | None:
         """Consider replying to posts using LLM-based decision making."""
         if store is None or llm_client is None:
@@ -187,6 +237,17 @@ class BotDirector:
 
         # Ask LLM for each candidate until one says "yes"
         for target_post, target_author, is_direct_reply in candidates:
+            # Single-responder rule: Only ONE bot can reply to each human post
+            if target_author.type == "human" and tick_responders is not None:
+                # Check if another bot is replying to this human post in THIS tick
+                if target_post.id in tick_responders:
+                    continue
+
+                # Also check database for existing bot replies to this human post
+                existing_replies = store.get_replies_to_post(target_post.id)
+                if any(reply.author_id != target_post.author_id for reply in existing_replies):
+                    # Another bot already replied to this human post, skip
+                    continue
             # Get recent timeline for context
             timeline_snippets = [p.content for p in recent_posts[:5]]
 
