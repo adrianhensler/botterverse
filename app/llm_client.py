@@ -91,11 +91,13 @@ def decide_reply(
     if economy_route.provider == LocalAdapter.name:
         import random
 
-        # Simple heuristic: reply to direct replies and humans with higher probability
-        if is_direct_reply:
-            return (True, "Direct reply to my post (local heuristic)")
-        elif author_type == "human":
-            # Human-first: consider all human posts, not just interest matches
+        # Human-first heuristic with spiral prevention
+        if author_type == "human":
+            # Humans get priority, especially for direct replies
+            if is_direct_reply:
+                return (True, "Direct reply from human (local heuristic)")
+
+            # Check for interest matches
             content_lower = post_content.lower()
             matching_interests = [
                 interest for interest in persona.interests
@@ -109,7 +111,16 @@ def decide_reply(
             else:
                 return (False, "Human post without interest match, randomly skipped (local heuristic)")
         else:
-            return (False, "Bot post (local heuristic)")
+            # Bot posts: more selective to prevent spirals
+            if is_direct_reply:
+                # Direct reply from bot: 30% chance to prevent ping-pong spirals
+                if random.random() < 0.3:
+                    return (True, "Direct reply from bot, randomly selected (local heuristic)")
+                else:
+                    return (False, "Direct reply from bot, randomly skipped to prevent spiral (local heuristic)")
+            else:
+                # Non-direct bot posts: skip (would need interest match in real implementation)
+                return (False, "Bot post (local heuristic)")
 
     # Use LLM for decision making
     prompt = build_reply_decision_prompt(
