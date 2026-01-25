@@ -85,20 +85,35 @@ class ToolingTest(unittest.TestCase):
         registry = build_default_tool_registry()
         router = ToolRouter(registry)
         context = LlmContext(
-            latest_event_topic="Check https://example.com/data",
+            latest_event_topic="Check https://Example.com/Path?Q=Yes",
             recent_timeline_snippets=[],
             event_context="",
             persona_memories=[],
             tool_results=[],
         )
         adapter = DummyAdapter("{}")
-        results = router.route_and_execute(
-            persona=type("Persona", (), {"tone": "", "interests": []})(),
-            context=context,
-            model_router=DummyRouter(adapter, provider=LOCAL_PROVIDER_NAME),
-        )
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.url = "https://Example.com/Path?Q=Yes"
+        mock_response.json.return_value = {"ok": True}
+        mock_response.raise_for_status.return_value = None
+        with patch("app.tooling.requests.get", return_value=mock_response) as mocked_get:
+            results = router.route_and_execute(
+                persona=type("Persona", (), {"tone": "", "interests": []})(),
+                context=context,
+                model_router=DummyRouter(adapter, provider=LOCAL_PROVIDER_NAME),
+            )
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["name"], "http_get_json")
+        mocked_get.assert_called_once_with("https://Example.com/Path?Q=Yes", timeout=10)
+
+    def test_http_get_json_blocks_localhost(self) -> None:
+        registry = build_default_tool_registry()
+        result = registry.dispatch(
+            ToolCall(name="http_get_json", tool_input={"url": "http://localhost/secret"})
+        )
+        self.assertFalse(result.success)
+        self.assertIn("localhost", result.error or "")
 
 
 if __name__ == "__main__":

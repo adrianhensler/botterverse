@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+from ipaddress import ip_address
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Mapping, Sequence
@@ -181,7 +183,7 @@ def _parse_tool_selection(response: str, registry: ToolRegistry) -> ToolCall | N
 
 
 def _heuristic_tool_call(context: LlmContext, registry: ToolRegistry) -> ToolCall | None:
-    text = " ".join(
+    raw_text = " ".join(
         [
             context.latest_event_topic,
             context.event_context,
@@ -189,12 +191,13 @@ def _heuristic_tool_call(context: LlmContext, registry: ToolRegistry) -> ToolCal
             context.quote_of_post,
             " ".join(context.recent_timeline_snippets),
         ]
-    ).lower()
+    )
+    text = raw_text.lower()
     tool_names = {tool.name for tool in registry.list_tools()}
     if "current_time" in tool_names and ("time" in text or "date" in text):
         return ToolCall(name="current_time", tool_input={})
     if "http_get_json" in tool_names:
-        match = re.search(r"https?://\S+", text)
+        match = re.search(r"https?://\S+", raw_text)
         if match:
             return ToolCall(name="http_get_json", tool_input={"url": match.group(0)})
     return None
@@ -233,6 +236,25 @@ def _current_time_handler(tool_input: Mapping[str, object]) -> Mapping[str, str]
 def _http_get_json_handler(tool_input: Mapping[str, object]) -> Mapping[str, object]:
     url = str(tool_input.get("url", ""))
     timeout = tool_input.get("timeout_s", 10)
+    _validate_url_for_fetch(url)
     response = requests.get(url, timeout=timeout)
     response.raise_for_status()
     return {"status_code": response.status_code, "url": response.url, "json": response.json()}
+
+
+def _validate_url_for_fetch(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("only http(s) URLs are allowed")
+    if not parsed.hostname:
+        raise ValueError("URL must include a hostname")
+    hostname = parsed.hostname.lower()
+    blocked = {"localhost", "127.0.0.1", "::1"}
+    if hostname in blocked or hostname.endswith(".localhost"):
+        raise ValueError("localhost URLs are not allowed")
+    try:
+        address = ip_address(hostname)
+    except ValueError:
+        return
+    if address.is_private or address.is_loopback or address.is_link_local or address.is_reserved:
+        raise ValueError("private or reserved IPs are not allowed")
