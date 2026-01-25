@@ -53,14 +53,14 @@ class NewsSearchTest(unittest.TestCase):
             timeout=5.0,
         )
 
-    def test_search_news_handles_http_error(self) -> None:
+    def test_search_news_propagates_http_error(self) -> None:
         provider = NewsApiProvider(api_key="test-key", base_url=NEWS_API_SEARCH_URL)
         with patch(
             "app.integrations.news.httpx.get",
             side_effect=httpx.HTTPError("boom"),
         ):
-            results = search_news("OpenAI", provider=provider)
-        self.assertEqual(results, [])
+            with self.assertRaises(httpx.HTTPError):
+                search_news("OpenAI", provider=provider)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ from . import IntegrationEvent
 NEWS_API_URL = "https://newsapi.org/v2/top-headlines"
 NEWS_API_SEARCH_URL = "https://newsapi.org/v2/everything"
 DEFAULT_HEADLINE_TITLE = "News headline"
-_QUERY_PATTERN = re.compile(r"^[\w\s,.'\"-:?!&/()]{2,}$", re.UNICODE)
+_QUERY_PATTERN = re.compile(r"^[\w\s,.'\"-:?!&/()+#]{2,}$", re.UNICODE)
 
 
 @dataclass(frozen=True)
@@ -56,11 +56,8 @@ class NewsApiProvider:
             "sortBy": "publishedAt",
             "language": "en",
         }
-        try:
-            response = httpx.get(self._base_url, params=params, timeout=timeout_s)
-            response.raise_for_status()
-        except httpx.HTTPError:
-            return []
+        response = httpx.get(self._base_url, params=params, timeout=timeout_s)
+        response.raise_for_status()
         payload = response.json()
         articles = payload.get("articles", [])
         results: list[NewsHeadline] = []
