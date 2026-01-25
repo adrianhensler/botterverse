@@ -12,6 +12,7 @@ from typing import Callable, Mapping, Sequence
 
 import requests
 
+from .integrations.news import get_news_provider, search_news
 from .integrations.weather import fetch_weather, normalize_weather_units, validate_weather_location
 from .llm_prompts import build_tool_selection_prompt
 from .llm_types import LlmContext, PersonaLike
@@ -210,6 +211,10 @@ def _heuristic_tool_call(context: LlmContext, registry: ToolRegistry) -> ToolCal
         match = re.search(r"https?://\S+", raw_text)
         if match:
             return ToolCall(name="http_get_json", tool_input={"url": match.group(0)})
+    if "news_search" in tool_names:
+        query = _extract_news_query(raw_text)
+        if query:
+            return ToolCall(name="news_search", tool_input={"query": query})
     return None
 
 
@@ -234,6 +239,22 @@ def _extract_weather_location(text: str) -> str | None:
         return validate_weather_location(location)
     except ValueError:
         return None
+
+
+def _extract_news_query(text: str) -> str | None:
+    if not text.strip():
+        return None
+    match = re.search(
+        r"\b(?:news|headline|headlines|updates?|stories|articles)\b(?:\s+about|\s+on|\s+for)?\s+([^\n]+)",
+        text,
+        re.IGNORECASE,
+    )
+    query = match.group(1).strip() if match else text.strip()
+    query = re.sub(r"[.?!]+$", "", query)
+    query = query.strip(" ,;:")
+    if len(query) < 2:
+        return None
+    return query
 
 
 def build_default_tool_registry() -> ToolRegistry:
@@ -265,11 +286,25 @@ def build_default_tool_registry() -> ToolRegistry:
                 "required": ["url"],
             },
         ),
+        ToolSchema(
+            name="news_search",
+            description="Search for recent news headlines and URLs related to a user query.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer"},
+                    "timeout_s": {"type": "number"},
+                },
+                "required": ["query"],
+            },
+        ),
     ]
     handlers = {
         "current_time": _current_time_handler,
         "weather": _weather_handler,
         "http_get_json": _http_get_json_handler,
+        "news_search": _news_search_handler,
     }
     return ToolRegistry(tools=tools, handlers=handlers)
 
@@ -326,6 +361,35 @@ def _http_get_json_handler(tool_input: Mapping[str, object]) -> Mapping[str, obj
         return {"status_code": response.status_code, "url": response.url, "json": response.json()}
     finally:
         response.close()
+
+
+def _news_search_handler(tool_input: Mapping[str, object]) -> Mapping[str, object]:
+    query = str(tool_input.get("query", "")).strip()
+    if not query:
+        raise ValueError("query is required")
+    limit = tool_input.get("limit", 3)
+    timeout = tool_input.get("timeout_s", 10.0)
+    try:
+        limit_value = int(limit)
+    except (TypeError, ValueError):
+        limit_value = 3
+    try:
+        timeout_value = float(timeout)
+    except (TypeError, ValueError):
+        timeout_value = 10.0
+    timeout_value = max(1.0, min(timeout_value, 20.0))
+    provider = get_news_provider()
+    results = search_news(
+        query,
+        limit=limit_value,
+        timeout_s=timeout_value,
+        provider=provider,
+    )
+    return {
+        "query": query,
+        "provider": provider.name,
+        "results": results,
+    }
 
 
 def _validate_url_for_fetch(url: str) -> None:
