@@ -238,7 +238,7 @@ def _http_get_json_handler(tool_input: Mapping[str, object]) -> Mapping[str, obj
     url = str(tool_input.get("url", ""))
     timeout = tool_input.get("timeout_s", 10)
     _validate_url_for_fetch(url)
-    response = requests.get(url, timeout=timeout, stream=True)
+    response = requests.get(url, timeout=timeout, stream=True, allow_redirects=False)
     try:
         _validate_response_address(response)
         response.raise_for_status()

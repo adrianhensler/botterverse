@@ -57,7 +57,12 @@ class ToolingTest(unittest.TestCase):
             result = registry.dispatch(ToolCall(name="http_get_json", tool_input={"url": mock_response.url}))
         self.assertTrue(result.success)
         self.assertEqual(result.output["json"], {"value": 42})
-        mocked_get.assert_called_once()
+        mocked_get.assert_called_once_with(
+            "https://example.com/data",
+            timeout=10,
+            stream=True,
+            allow_redirects=False,
+        )
 
     def test_tool_router_selects_and_executes_tool(self) -> None:
         tool = ToolSchema(
@@ -115,7 +120,12 @@ class ToolingTest(unittest.TestCase):
             )
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["name"], "http_get_json")
-        mocked_get.assert_called_once_with("https://Example.com/Path?Q=Yes", timeout=10, stream=True)
+        mocked_get.assert_called_once_with(
+            "https://Example.com/Path?Q=Yes",
+            timeout=10,
+            stream=True,
+            allow_redirects=False,
+        )
 
     def test_http_get_json_blocks_localhost(self) -> None:
         registry = build_default_tool_registry()
