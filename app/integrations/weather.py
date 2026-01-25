@@ -159,20 +159,26 @@ def fetch_weather_with_retry(
     location: str,
     units: str = "metric",
     timeout_s: float = 10.0,
-) -> tuple[Mapping[str, object] | None, list[str]]:
+) -> tuple[Mapping[str, object] | None, list[str], str | None]:
     """
     Fetch weather with automatic retry for different location formats.
     Uses per-location caching with 15-minute TTL.
 
     Returns:
-        (weather_data, attempted_formats) tuple
+        (weather_data, attempted_formats, error_type) tuple
         weather_data is None if all attempts failed
+        error_type is None on success, or one of:
+            "not_found" - Location not found (404)
+            "auth_error" - Invalid API key (401)
+            "rate_limited" - Rate limit exceeded (429)
+            "unavailable" - Network error or other failure
     """
     if not api_key:
-        return (None, [])
+        return (None, [], "auth_error")
 
     location_formats = normalize_location_format(location)
     attempted = []
+    last_error_type = None
 
     for fmt in location_formats:
         attempted.append(fmt)
@@ -185,7 +191,7 @@ def fetch_weather_with_retry(
         cache_key = f"{cleaned}:{units}"
         cached = _get_cached_weather(cache_key)
         if cached:
-            return (cached, attempted)
+            return (cached, attempted, None)
 
         normalized_units = normalize_weather_units(units)
         params = {
@@ -221,14 +227,29 @@ def fetch_weather_with_retry(
             # Cache the result
             _cache_weather(cache_key, weather_data)
 
-            return (weather_data, attempted)
+            return (weather_data, attempted, None)
+
+        except httpx.HTTPStatusError as e:
+            # Classify error by status code
+            if e.response.status_code == 404:
+                last_error_type = "not_found"
+            elif e.response.status_code == 401:
+                last_error_type = "auth_error"
+                break  # Don't retry location formats for auth errors
+            elif e.response.status_code == 429:
+                last_error_type = "rate_limited"
+                break  # Don't retry location formats for rate limits
+            else:
+                last_error_type = "unavailable"
+            continue  # Try next format for 404s and 5xx errors
 
         except httpx.HTTPError:
-            # Try next format
+            # Network errors, timeouts, etc.
+            last_error_type = "unavailable"
             continue
 
     # All attempts failed
-    return (None, attempted)
+    return (None, attempted, last_error_type or "unavailable")
 
 
 def fetch_weather(
@@ -238,7 +259,7 @@ def fetch_weather(
     timeout_s: float = 10.0,
 ) -> Mapping[str, object] | None:
     """Fetch current weather with automatic format retry."""
-    weather_data, _attempted = fetch_weather_with_retry(
+    weather_data, _attempted, _error_type = fetch_weather_with_retry(
         api_key, location, units, timeout_s
     )
     return weather_data

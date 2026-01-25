@@ -331,18 +331,41 @@ def _weather_handler(tool_input: Mapping[str, object]) -> Mapping[str, object]:
     timeout_value = max(1.0, min(timeout_value, 20.0))
 
     # Fetch with retry (includes per-location caching)
-    weather, attempted_formats = fetch_weather_with_retry(
+    weather, attempted_formats, error_type = fetch_weather_with_retry(
         api_key, location_raw, units=units, timeout_s=timeout_value
     )
 
     if not weather:
-        return {
-            "status": "location_not_found",
-            "location": location_raw,
-            "attempted_formats": attempted_formats,
-            "suggestion": "Try specifying city and country (e.g., 'Halifax, Canada' or 'New York, US')",
-            "units": units,
-        }
+        # Return appropriate error based on failure type
+        if error_type == "auth_error":
+            return {
+                "status": "auth_error",
+                "message": "Weather API key is invalid or not configured",
+                "location": location_raw,
+                "units": units,
+            }
+        elif error_type == "rate_limited":
+            return {
+                "status": "rate_limited",
+                "message": "Weather API rate limit exceeded, try again later",
+                "location": location_raw,
+                "units": units,
+            }
+        elif error_type == "not_found":
+            return {
+                "status": "location_not_found",
+                "location": location_raw,
+                "attempted_formats": attempted_formats,
+                "suggestion": "Try specifying city and country (e.g., 'Halifax, Canada' or 'New York, US')",
+                "units": units,
+            }
+        else:  # unavailable
+            return {
+                "status": "unavailable",
+                "message": "Weather service temporarily unavailable (network error or server issue)",
+                "location": location_raw,
+                "units": units,
+            }
 
     return {"status": "ok", **weather}
 

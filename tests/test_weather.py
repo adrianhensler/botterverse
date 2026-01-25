@@ -70,19 +70,22 @@ class WeatherLocationTest(unittest.TestCase):
         }
 
         with patch("app.integrations.weather.httpx.get", return_value=mock_response):
-            weather, attempted = fetch_weather_with_retry("test-key", "Halifax,CA")
+            weather, attempted, error_type = fetch_weather_with_retry("test-key", "Halifax,CA")
 
         self.assertIsNotNone(weather)
         self.assertEqual(weather["temperature"], 20)
         self.assertEqual(weather["summary"], "clear sky")
         self.assertEqual(len(attempted), 1)
+        self.assertIsNone(error_type)
 
     def test_fetch_with_retry_success_second_attempt(self):
         """Test successful fetch on fallback format"""
         def mock_get(url, params, timeout):
-            # First attempt fails, second succeeds
+            # First attempt fails with 404, second succeeds
             if params["q"] == "Halifax,NS,CA":
-                raise httpx.HTTPStatusError("404", request=Mock(), response=Mock())
+                mock_error_response = Mock()
+                mock_error_response.status_code = 404
+                raise httpx.HTTPStatusError("404", request=Mock(), response=mock_error_response)
             else:
                 mock_response = Mock()
                 mock_response.status_code = 200
@@ -96,19 +99,21 @@ class WeatherLocationTest(unittest.TestCase):
                 return mock_response
 
         with patch("app.integrations.weather.httpx.get", side_effect=mock_get):
-            weather, attempted = fetch_weather_with_retry("test-key", "Halifax NS")
+            weather, attempted, error_type = fetch_weather_with_retry("test-key", "Halifax NS")
 
         self.assertIsNotNone(weather)
         self.assertEqual(weather["temperature"], 15)
         self.assertGreater(len(attempted), 1)
+        self.assertIsNone(error_type)
 
     def test_fetch_with_retry_all_fail(self):
         """Test all format attempts fail"""
         with patch("app.integrations.weather.httpx.get", side_effect=httpx.HTTPError("Network error")):
-            weather, attempted = fetch_weather_with_retry("test-key", "InvalidCity123")
+            weather, attempted, error_type = fetch_weather_with_retry("test-key", "InvalidCity123")
 
         self.assertIsNone(weather)
         self.assertGreater(len(attempted), 0)
+        self.assertEqual(error_type, "unavailable")
 
     def test_cache_hit_returns_immediately(self):
         """Test cached weather returns without API call"""
@@ -125,13 +130,14 @@ class WeatherLocationTest(unittest.TestCase):
 
         # Fetch should return cached data without API call
         with patch("app.integrations.weather.httpx.get") as mock_get:
-            weather, attempted = fetch_weather_with_retry("test-key", "Halifax,CA", units="metric")
+            weather, attempted, error_type = fetch_weather_with_retry("test-key", "Halifax,CA", units="metric")
 
         # No API call should have been made
         mock_get.assert_not_called()
         self.assertIsNotNone(weather)
         self.assertTrue(weather.get("cached"))
         self.assertEqual(weather.get("temperature"), 20)
+        self.assertIsNone(error_type)
 
     def test_cache_expiry(self):
         """Test expired cache entries are removed"""
@@ -160,6 +166,42 @@ class WeatherLocationTest(unittest.TestCase):
         # Stale entry should be removed
         self.assertNotIn("Stale:metric", _WEATHER_CACHE)
         self.assertIn("Fresh:metric", _WEATHER_CACHE)
+
+    def test_auth_error_returns_proper_error_type(self):
+        """Test 401 auth error returns auth_error type"""
+        mock_error_response = Mock()
+        mock_error_response.status_code = 401
+
+        with patch("app.integrations.weather.httpx.get") as mock_get:
+            mock_get.side_effect = httpx.HTTPStatusError("401", request=Mock(), response=mock_error_response)
+            weather, attempted, error_type = fetch_weather_with_retry("test-key", "Halifax,CA")
+
+        self.assertIsNone(weather)
+        self.assertEqual(error_type, "auth_error")
+
+    def test_rate_limit_returns_proper_error_type(self):
+        """Test 429 rate limit returns rate_limited type"""
+        mock_error_response = Mock()
+        mock_error_response.status_code = 429
+
+        with patch("app.integrations.weather.httpx.get") as mock_get:
+            mock_get.side_effect = httpx.HTTPStatusError("429", request=Mock(), response=mock_error_response)
+            weather, attempted, error_type = fetch_weather_with_retry("test-key", "Halifax,CA")
+
+        self.assertIsNone(weather)
+        self.assertEqual(error_type, "rate_limited")
+
+    def test_location_not_found_returns_proper_error_type(self):
+        """Test 404 location not found returns not_found type"""
+        mock_error_response = Mock()
+        mock_error_response.status_code = 404
+
+        with patch("app.integrations.weather.httpx.get") as mock_get:
+            mock_get.side_effect = httpx.HTTPStatusError("404", request=Mock(), response=mock_error_response)
+            weather, attempted, error_type = fetch_weather_with_retry("test-key", "InvalidCity")
+
+        self.assertIsNone(weather)
+        self.assertEqual(error_type, "not_found")
 
 
 if __name__ == "__main__":
