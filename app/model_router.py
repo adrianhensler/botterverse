@@ -224,6 +224,7 @@ class ModelRouter:
                 recent_timeline_snippets=[],
                 event_context="",
                 persona_memories=[],
+                tool_results=[],
             ),
         )
         if provider_name == LocalAdapter.name:

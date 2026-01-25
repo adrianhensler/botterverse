@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable, Mapping, Sequence
 
 from .llm_prompts import build_dm_summary_prompt, build_prompt, build_reply_decision_prompt
@@ -10,12 +10,14 @@ from .llm_prompts import build_dm_summary_prompt, build_prompt, build_reply_deci
 logger = logging.getLogger("botterverse.llm")
 from .llm_types import LlmContext, PersonaLike
 from .model_router import LocalAdapter, build_default_router
+from .tooling import ToolRouter, build_default_tool_registry
 
 MAX_CHARACTERS = 280
 SUMMARY_MAX_CHARACTERS = 500
 MODEL_NAME = "local-stub"
 
 _DEFAULT_ROUTER = build_default_router()
+_DEFAULT_TOOL_ROUTER = ToolRouter(build_default_tool_registry())
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,13 @@ def generate_post(persona: PersonaLike, context: Mapping[str, object]) -> str:
 def generate_post_with_audit(persona: PersonaLike, context: Mapping[str, object]) -> LlmResult:
     try:
         llm_context = _coerce_context(context)
+        tool_results = []
+        try:
+            tool_results = _DEFAULT_TOOL_ROUTER.route_and_execute(persona, llm_context, _DEFAULT_ROUTER)
+        except Exception as exc:
+            logger.warning("Tool routing failed: %s", exc)
+        if tool_results:
+            llm_context = replace(llm_context, tool_results=tool_results)
         prompt = build_prompt(persona, llm_context)
         route = _DEFAULT_ROUTER.route(persona, llm_context)
         adapter = _DEFAULT_ROUTER.adapter_for(route.provider)
@@ -153,6 +162,7 @@ def decide_reply(
             recent_timeline_snippets=recent_timeline,
             event_context="",
             persona_memories=[],
+            tool_results=[],
         )
 
         response = adapter.generate(
@@ -202,6 +212,7 @@ def generate_dm_summary_with_audit(
         recent_timeline_snippets=thread_snippets,
         event_context=participant_context,
         persona_memories=[],
+        tool_results=[],
     )
     prompt = build_dm_summary_prompt(persona, thread_snippets, participant_context)
     try:
@@ -237,6 +248,7 @@ def _coerce_context(context: Mapping[str, object]) -> LlmContext:
     reply_to_post = str(context.get("reply_to_post", ""))
     quote_of_post = str(context.get("quote_of_post", ""))
     decision_reasoning = str(context.get("decision_reasoning", ""))
+    tool_results = _tool_results_list(context.get("tool_results", []))
     return LlmContext(
         latest_event_topic=latest_event_topic,
         recent_timeline_snippets=recent_snippets,
@@ -245,6 +257,7 @@ def _coerce_context(context: Mapping[str, object]) -> LlmContext:
         reply_to_post=reply_to_post,
         quote_of_post=quote_of_post,
         decision_reasoning=decision_reasoning,
+        tool_results=tool_results,
     )
 
 
@@ -253,6 +266,20 @@ def _string_list(value: object) -> Sequence[str]:
         return [value]
     if isinstance(value, Iterable):
         return [str(item) for item in value]
+    return []
+
+
+def _tool_results_list(value: object) -> Sequence[Mapping[str, object]]:
+    if isinstance(value, Mapping):
+        return [dict(value)]
+    if isinstance(value, Iterable) and not isinstance(value, str):
+        results: list[Mapping[str, object]] = []
+        for item in value:
+            if isinstance(item, Mapping):
+                results.append(dict(item))
+            else:
+                results.append({"value": item})
+        return results
     return []
 
 
