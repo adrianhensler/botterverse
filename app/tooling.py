@@ -215,13 +215,14 @@ def _heuristic_tool_call(context: LlmContext, registry: ToolRegistry) -> ToolCal
 
 def _extract_weather_location(text: str) -> str | None:
     pattern = re.compile(
-        r"(?:weather|forecast|temperature|temps?)\s*(?:in|for|at)\s+([^?.!,\n]+)",
+        r"(?:weather|forecast|temperature|temps?)\s*(?:in|for|at)\s+([^\n]+)",
         re.IGNORECASE,
     )
     match = pattern.search(text)
     if not match:
         return None
     location = match.group(1)
+    location = re.sub(r"[.?!,]+$", "", location.strip())
     location = re.sub(
         r"\b(tonight|today|tomorrow|this evening|this morning|this afternoon|this weekend|this week)\b.*",
         "",
