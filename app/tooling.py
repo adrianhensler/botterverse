@@ -249,7 +249,9 @@ def _extract_news_query(text: str) -> str | None:
         text,
         re.IGNORECASE,
     )
-    query = match.group(1).strip() if match else text.strip()
+    if not match:
+        return None
+    query = match.group(1).strip()
     query = re.sub(r"[.?!]+$", "", query)
     query = query.strip(" ,;:")
     if len(query) < 2:

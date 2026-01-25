@@ -127,6 +127,24 @@ class ToolingTest(unittest.TestCase):
             allow_redirects=False,
         )
 
+    def test_local_heuristic_skips_news_without_keywords(self) -> None:
+        registry = build_default_tool_registry()
+        router = ToolRouter(registry)
+        context = LlmContext(
+            latest_event_topic="Tell me a joke",
+            recent_timeline_snippets=[],
+            event_context="",
+            persona_memories=[],
+            tool_results=[],
+        )
+        adapter = DummyAdapter("{}")
+        results = router.route_and_execute(
+            persona=type("Persona", (), {"tone": "", "interests": []})(),
+            context=context,
+            model_router=DummyRouter(adapter, provider=LOCAL_PROVIDER_NAME),
+        )
+        self.assertEqual(results, [])
+
     def test_http_get_json_blocks_localhost(self) -> None:
         registry = build_default_tool_registry()
         result = registry.dispatch(
