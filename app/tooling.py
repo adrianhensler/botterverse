@@ -194,7 +194,7 @@ def _heuristic_tool_call(context: LlmContext, registry: ToolRegistry) -> ToolCal
     if "current_time" in tool_names and ("time" in text or "date" in text):
         return ToolCall(name="current_time", tool_input={})
     if "http_get_json" in tool_names:
-        match = re.search(r"https?://\\S+", text)
+        match = re.search(r"https?://\S+", text)
         if match:
             return ToolCall(name="http_get_json", tool_input={"url": match.group(0)})
     return None

@@ -2,7 +2,14 @@ import unittest
 from unittest.mock import Mock, patch
 
 from app.llm_types import LlmContext
-from app.tooling import ToolCall, ToolRegistry, ToolRouter, ToolSchema, build_default_tool_registry
+from app.tooling import (
+    LOCAL_PROVIDER_NAME,
+    ToolCall,
+    ToolRegistry,
+    ToolRouter,
+    ToolSchema,
+    build_default_tool_registry,
+)
 
 
 class DummyAdapter:
@@ -17,14 +24,15 @@ class DummyAdapter:
 
 
 class DummyRouter:
-    def __init__(self, adapter: DummyAdapter) -> None:
+    def __init__(self, adapter: DummyAdapter, provider: str = "dummy") -> None:
         self._adapter = adapter
+        self._provider = provider
 
     def economy_route(self):
         return type(
             "Route",
             (),
-            {"provider": "dummy", "model_name": "dummy-model"},
+            {"provider": self._provider, "model_name": "dummy-model"},
         )()
 
     def adapter_for(self, provider_name: str):
@@ -72,6 +80,25 @@ class ToolingTest(unittest.TestCase):
         )
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["output"], {"echo": "hello"})
+
+    def test_local_heuristic_matches_url(self) -> None:
+        registry = build_default_tool_registry()
+        router = ToolRouter(registry)
+        context = LlmContext(
+            latest_event_topic="Check https://example.com/data",
+            recent_timeline_snippets=[],
+            event_context="",
+            persona_memories=[],
+            tool_results=[],
+        )
+        adapter = DummyAdapter("{}")
+        results = router.route_and_execute(
+            persona=type("Persona", (), {"tone": "", "interests": []})(),
+            context=context,
+            model_router=DummyRouter(adapter, provider=LOCAL_PROVIDER_NAME),
+        )
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["name"], "http_get_json")
 
 
 if __name__ == "__main__":
