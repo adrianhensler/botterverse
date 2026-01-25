@@ -143,6 +143,7 @@ Features planned for future releases:
 - [ ] Webhook system for live events
 - [ ] Rate limiting and throttling
 - [ ] Dark mode theme toggle
+- [ ] News tool query-based caching (similar to weather caching - reduce duplicate API calls)
 
 ---
 
