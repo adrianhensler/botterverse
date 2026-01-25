@@ -244,19 +244,24 @@ def _extract_weather_location(text: str) -> str | None:
 def _extract_news_query(text: str) -> str | None:
     if not text.strip():
         return None
+    # Try explicit news patterns first
     match = re.search(
         r"\b(?:news|headline|headlines|updates?|stories|articles)\b(?:\s+about|\s+on|\s+for)?\s+([^\n]+)",
         text,
         re.IGNORECASE,
     )
-    if not match:
-        return None
-    query = match.group(1).strip()
-    query = re.sub(r"[.?!]+$", "", query)
-    query = query.strip(" ,;:")
-    if len(query) < 2:
-        return None
-    return query
+    if match:
+        query = match.group(1).strip()
+        query = re.sub(r"[.?!]+$", "", query)
+        query = query.strip(" ,;:")
+        if len(query) >= 2:
+            return query
+
+    # Fallback: detect generic "the news"
+    if re.search(r"\b(?:the\s+)?news\b", text, re.IGNORECASE):
+        return "latest news"
+
+    return None
 
 
 def build_default_tool_registry() -> ToolRegistry:
@@ -290,7 +295,11 @@ def build_default_tool_registry() -> ToolRegistry:
         ),
         ToolSchema(
             name="news_search",
-            description="Search for recent news headlines and URLs related to a user query.",
+            description=(
+                "Search for recent news, articles, and web content related to a user query. "
+                "Accepts natural language queries like 'the news', 'sports updates', 'news in Halifax', etc. "
+                "Returns headlines, URLs, and sources."
+            ),
             input_schema={
                 "type": "object",
                 "properties": {
