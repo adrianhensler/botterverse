@@ -12,6 +12,7 @@ from . import IntegrationEvent
 
 NEWS_API_URL = "https://newsapi.org/v2/top-headlines"
 NEWS_API_SEARCH_URL = "https://newsapi.org/v2/everything"
+TAVILY_API_URL = "https://api.tavily.com/search"
 DEFAULT_HEADLINE_TITLE = "News headline"
 _QUERY_PATTERN = re.compile(r"^[\w\s,.'\"-:?!&/()+#]{2,}$", re.UNICODE)
 
@@ -74,6 +75,58 @@ class NewsApiProvider:
         return results
 
 
+class TavilyProvider:
+    name = "tavily"
+
+    def __init__(self, api_key: str, search_depth: str = "basic") -> None:
+        self._api_key = api_key
+        self._search_depth = search_depth  # "basic" or "advanced"
+
+    def search(self, query: str, limit: int, timeout_s: float) -> Sequence[NewsHeadline]:
+        if not self._api_key:
+            raise ValueError("Tavily API key not configured")
+
+        payload = {
+            "api_key": self._api_key,
+            "query": query,
+            "max_results": limit,
+            "search_depth": self._search_depth,
+        }
+
+        try:
+            response = httpx.post(TAVILY_API_URL, json=payload, timeout=timeout_s)
+            response.raise_for_status()
+        except httpx.HTTPError as e:
+            # Log and re-raise for handler to catch
+            raise ValueError(f"Tavily API error: {e}")
+
+        data = response.json()
+        results: list[NewsHeadline] = []
+
+        for item in data.get("results", []):
+            title = item.get("title") or DEFAULT_HEADLINE_TITLE
+            url = item.get("url")
+            # Tavily doesn't always provide source domain - extract from URL
+            source = None
+            if url:
+                from urllib.parse import urlparse
+                source = urlparse(url).netloc
+
+            # Tavily uses "published_date" (might be None for web results)
+            published_at = item.get("published_date")
+
+            results.append(
+                NewsHeadline(
+                    title=title,
+                    url=url,
+                    source=source,
+                    published_at=published_at,
+                )
+            )
+
+        return results
+
+
 def _normalize_limit(limit: int, min_value: int = 1, max_value: int = 5) -> int:
     return max(min_value, min(int(limit), max_value))
 
@@ -93,6 +146,12 @@ def get_news_provider(provider_name: str | None = None, api_key: str | None = No
     provider = (provider_name or os.getenv("NEWS_PROVIDER", "newsapi")).strip().lower()
     if provider == "newsapi":
         return NewsApiProvider(api_key or os.getenv("NEWS_API_KEY", ""))
+    elif provider == "tavily":
+        search_depth = os.getenv("TAVILY_SEARCH_DEPTH", "basic")  # "basic" or "advanced"
+        return TavilyProvider(
+            api_key=api_key or os.getenv("TAVILY_API_KEY", ""),
+            search_depth=search_depth,
+        )
     raise ValueError(f"unsupported news provider: {provider}")
 
 

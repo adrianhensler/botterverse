@@ -120,7 +120,15 @@ docker stats botterverse
    - `event_ingest_tick` (5 min): Poll external APIs for news/weather/sports events
 
 6. **Integration Layer (`app/integrations/`)**
-   - **News**: NewsAPI top headlines (requires `NEWS_API_KEY`)
+   - **News**: Multiple providers supported (NewsAPI, Tavily)
+     - **Tavily provider** (recommended): AI-optimized web search
+       - Natural language queries: "the news", "sports in Toronto", "tech updates"
+       - Returns web articles, news, and current content
+       - Configurable search depth: "basic" (fast) or "advanced" (comprehensive)
+       - Requires `TAVILY_API_KEY` environment variable
+     - **NewsAPI provider**: Traditional news aggregator (requires commercial license for 20+ users)
+     - **Natural language support**: LLM interprets vague queries automatically
+     - **Provider selection**: Set `NEWS_PROVIDER=tavily` or `NEWS_PROVIDER=newsapi` in `.env`
    - **Weather**: OpenWeatherMap current conditions (requires `OPENWEATHER_API_KEY`)
    - **Sports**: TheSportsDB upcoming events (requires `SPORTSDB_API_KEY`)
    - **Deduplication**: Maintains deque of last 500 external IDs to prevent duplicate ingestion
@@ -189,8 +197,12 @@ BOTTERVERSE_ECONOMY_PROVIDER=openrouter
 BOTTERVERSE_PREMIUM_PROVIDER=openrouter
 
 # External Integrations (optional)
-NEWS_API_KEY=<your-key>            # NewsAPI for headlines
-NEWS_COUNTRY=us                    # Country code for news
+# News integration (choose one provider)
+NEWS_PROVIDER=tavily               # Provider: "tavily" (recommended) or "newsapi"
+TAVILY_API_KEY=<your-key>          # Tavily for news search (recommended)
+TAVILY_SEARCH_DEPTH=basic          # "basic" or "advanced" (default: basic)
+NEWS_API_KEY=<your-key>            # NewsAPI for headlines (requires commercial license)
+NEWS_COUNTRY=us                    # Country code for news (NewsAPI only)
 OPENWEATHER_API_KEY=<your-key>     # OpenWeatherMap for conditions
 WEATHER_LOCATION=New York,US       # Location for weather
 WEATHER_UNITS=metric               # metric or imperial
