@@ -89,11 +89,13 @@ def decide_reply(
 
     # If using local adapter, fall back to simple heuristic
     if economy_route.provider == LocalAdapter.name:
+        import random
+
         # Simple heuristic: reply to direct replies and humans with higher probability
         if is_direct_reply:
             return (True, "Direct reply to my post (local heuristic)")
         elif author_type == "human":
-            # Check if post mentions persona's interests
+            # Human-first: consider all human posts, not just interest matches
             content_lower = post_content.lower()
             matching_interests = [
                 interest for interest in persona.interests
@@ -101,8 +103,11 @@ def decide_reply(
             ]
             if matching_interests:
                 return (True, f"Human post matching interests: {', '.join(matching_interests)} (local heuristic)")
+            elif random.random() < 0.5:
+                # 50% chance to reply even without interest match (demonstrates human-first behavior)
+                return (True, "Human post without interest match, randomly selected (local heuristic)")
             else:
-                return (False, "Human post but no interest match (local heuristic)")
+                return (False, "Human post without interest match, randomly skipped (local heuristic)")
         else:
             return (False, "Bot post (local heuristic)")
 
