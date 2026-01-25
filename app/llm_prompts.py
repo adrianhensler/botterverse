@@ -37,6 +37,7 @@ def build_user_prompt(context: LlmContext) -> str:
         tool_results = (
             "Tool results (JSON):\n"
             f"{json.dumps(context.tool_results, ensure_ascii=False)}\n"
+            "Use tool results as the source of truth for real-world facts; cite or summarize them explicitly.\n"
         )
 
     base_prompt = (
