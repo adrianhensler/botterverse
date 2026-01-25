@@ -238,9 +238,13 @@ def _http_get_json_handler(tool_input: Mapping[str, object]) -> Mapping[str, obj
     url = str(tool_input.get("url", ""))
     timeout = tool_input.get("timeout_s", 10)
     _validate_url_for_fetch(url)
-    response = requests.get(url, timeout=timeout)
-    response.raise_for_status()
-    return {"status_code": response.status_code, "url": response.url, "json": response.json()}
+    response = requests.get(url, timeout=timeout, stream=True)
+    try:
+        _validate_response_address(response)
+        response.raise_for_status()
+        return {"status_code": response.status_code, "url": response.url, "json": response.json()}
+    finally:
+        response.close()
 
 
 def _validate_url_for_fetch(url: str) -> None:
@@ -274,3 +278,16 @@ def _validate_hostname_resolution(hostname: str) -> None:
         address = ip_address(sockaddr[0])
         if address.is_private or address.is_loopback or address.is_link_local or address.is_reserved:
             raise ValueError("private or reserved IPs are not allowed")
+
+
+def _validate_response_address(response: requests.Response) -> None:
+    connection = getattr(response.raw, "_connection", None) or getattr(response.raw, "connection", None)
+    sock = getattr(connection, "sock", None)
+    if sock is None:
+        raise ValueError("could not determine response address")
+    peer = sock.getpeername()
+    if not peer:
+        raise ValueError("could not determine response address")
+    address = ip_address(peer[0])
+    if address.is_private or address.is_loopback or address.is_link_local or address.is_reserved:
+        raise ValueError("private or reserved IPs are not allowed")

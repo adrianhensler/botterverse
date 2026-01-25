@@ -48,6 +48,11 @@ class ToolingTest(unittest.TestCase):
         mock_response.url = "https://example.com/data"
         mock_response.json.return_value = {"value": 42}
         mock_response.raise_for_status.return_value = None
+        mock_sock = Mock()
+        mock_sock.getpeername.return_value = ("93.184.216.34", 443)
+        mock_connection = Mock(sock=mock_sock)
+        mock_response.raw = Mock(_connection=mock_connection)
+        mock_response.close.return_value = None
         with patch("app.tooling.requests.get", return_value=mock_response) as mocked_get:
             result = registry.dispatch(ToolCall(name="http_get_json", tool_input={"url": mock_response.url}))
         self.assertTrue(result.success)
@@ -97,6 +102,11 @@ class ToolingTest(unittest.TestCase):
         mock_response.url = "https://Example.com/Path?Q=Yes"
         mock_response.json.return_value = {"ok": True}
         mock_response.raise_for_status.return_value = None
+        mock_sock = Mock()
+        mock_sock.getpeername.return_value = ("93.184.216.34", 443)
+        mock_connection = Mock(sock=mock_sock)
+        mock_response.raw = Mock(_connection=mock_connection)
+        mock_response.close.return_value = None
         with patch("app.tooling.requests.get", return_value=mock_response) as mocked_get:
             results = router.route_and_execute(
                 persona=type("Persona", (), {"tone": "", "interests": []})(),
@@ -105,7 +115,7 @@ class ToolingTest(unittest.TestCase):
             )
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["name"], "http_get_json")
-        mocked_get.assert_called_once_with("https://Example.com/Path?Q=Yes", timeout=10)
+        mocked_get.assert_called_once_with("https://Example.com/Path?Q=Yes", timeout=10, stream=True)
 
     def test_http_get_json_blocks_localhost(self) -> None:
         registry = build_default_tool_registry()
@@ -124,6 +134,23 @@ class ToolingTest(unittest.TestCase):
             result = registry.dispatch(
                 ToolCall(name="http_get_json", tool_input={"url": "http://internal.service/data"})
             )
+        self.assertFalse(result.success)
+        self.assertIn("private", result.error or "")
+
+    def test_http_get_json_blocks_private_peer_address(self) -> None:
+        registry = build_default_tool_registry()
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.url = "http://example.com/data"
+        mock_response.json.return_value = {"value": 42}
+        mock_response.raise_for_status.return_value = None
+        mock_sock = Mock()
+        mock_sock.getpeername.return_value = ("10.0.0.5", 80)
+        mock_connection = Mock(sock=mock_sock)
+        mock_response.raw = Mock(_connection=mock_connection)
+        mock_response.close.return_value = None
+        with patch("app.tooling.requests.get", return_value=mock_response):
+            result = registry.dispatch(ToolCall(name="http_get_json", tool_input={"url": mock_response.url}))
         self.assertFalse(result.success)
         self.assertIn("private", result.error or "")
 
