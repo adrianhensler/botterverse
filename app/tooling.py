@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from ipaddress import ip_address
+import os
 import socket
 from urllib.parse import urlparse
 from dataclasses import dataclass
@@ -11,11 +12,15 @@ from typing import Callable, Mapping, Sequence
 
 import requests
 
+from .integrations.weather import fetch_weather, normalize_weather_units, validate_weather_location
 from .llm_prompts import build_tool_selection_prompt
 from .llm_types import LlmContext, PersonaLike
 from .model_router import ModelRouter
 
 LOCAL_PROVIDER_NAME = "local-stub"
+WEATHER_RATE_LIMIT_SECONDS = int(os.getenv("WEATHER_RATE_LIMIT_SECONDS", "60"))
+WEATHER_TIMEOUT_SECONDS = float(os.getenv("WEATHER_TIMEOUT_SECONDS", "8"))
+_LAST_WEATHER_CALL: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -197,11 +202,37 @@ def _heuristic_tool_call(context: LlmContext, registry: ToolRegistry) -> ToolCal
     tool_names = {tool.name for tool in registry.list_tools()}
     if "current_time" in tool_names and ("time" in text or "date" in text):
         return ToolCall(name="current_time", tool_input={})
+    if "weather" in tool_names:
+        location = _extract_weather_location(raw_text)
+        if location:
+            return ToolCall(name="weather", tool_input={"location": location})
     if "http_get_json" in tool_names:
         match = re.search(r"https?://\S+", raw_text)
         if match:
             return ToolCall(name="http_get_json", tool_input={"url": match.group(0)})
     return None
+
+
+def _extract_weather_location(text: str) -> str | None:
+    pattern = re.compile(
+        r"(?:weather|forecast|temperature|temps?)\s*(?:in|for|at)\s+([^?.!,\n]+)",
+        re.IGNORECASE,
+    )
+    match = pattern.search(text)
+    if not match:
+        return None
+    location = match.group(1)
+    location = re.sub(
+        r"\b(tonight|today|tomorrow|this evening|this morning|this afternoon|this weekend|this week)\b.*",
+        "",
+        location,
+        flags=re.IGNORECASE,
+    )
+    location = location.strip(" ,.;!?")
+    try:
+        return validate_weather_location(location)
+    except ValueError:
+        return None
 
 
 def build_default_tool_registry() -> ToolRegistry:
@@ -210,6 +241,19 @@ def build_default_tool_registry() -> ToolRegistry:
             name="current_time",
             description="Get the current UTC time.",
             input_schema={"type": "object", "properties": {}, "required": []},
+        ),
+        ToolSchema(
+            name="weather",
+            description="Fetch current weather conditions for a location mentioned in the user request.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"},
+                    "units": {"type": "string", "enum": ["metric", "imperial", "standard"]},
+                    "timeout_s": {"type": "number"},
+                },
+                "required": ["location"],
+            },
         ),
         ToolSchema(
             name="http_get_json",
@@ -223,6 +267,7 @@ def build_default_tool_registry() -> ToolRegistry:
     ]
     handlers = {
         "current_time": _current_time_handler,
+        "weather": _weather_handler,
         "http_get_json": _http_get_json_handler,
     }
     return ToolRegistry(tools=tools, handlers=handlers)
@@ -232,6 +277,41 @@ def _current_time_handler(tool_input: Mapping[str, object]) -> Mapping[str, str]
     del tool_input
     now = datetime.now(timezone.utc)
     return {"utc": now.isoformat()}
+
+
+def _weather_handler(tool_input: Mapping[str, object]) -> Mapping[str, object]:
+    global _LAST_WEATHER_CALL
+    api_key = os.getenv("OPENWEATHER_API_KEY", "")
+    if not api_key:
+        raise ValueError("weather API key not configured")
+    location_raw = str(tool_input.get("location", ""))
+    location = validate_weather_location(location_raw)
+    units = normalize_weather_units(str(tool_input.get("units", "")))
+    timeout = tool_input.get("timeout_s", WEATHER_TIMEOUT_SECONDS)
+    try:
+        timeout_value = float(timeout)
+    except (TypeError, ValueError):
+        timeout_value = WEATHER_TIMEOUT_SECONDS
+    timeout_value = max(1.0, min(timeout_value, 20.0))
+    now = datetime.now(timezone.utc)
+    if _LAST_WEATHER_CALL is not None and WEATHER_RATE_LIMIT_SECONDS > 0:
+        elapsed = (now - _LAST_WEATHER_CALL).total_seconds()
+        if elapsed < WEATHER_RATE_LIMIT_SECONDS:
+            return {
+                "status": "rate_limited",
+                "retry_after_s": round(WEATHER_RATE_LIMIT_SECONDS - elapsed, 2),
+                "location": location,
+                "units": units,
+            }
+    _LAST_WEATHER_CALL = now
+    weather = fetch_weather(api_key, location, units=units, timeout_s=timeout_value)
+    if not weather:
+        return {
+            "status": "unavailable",
+            "location": location,
+            "units": units,
+        }
+    return {"status": "ok", **weather}
 
 
 def _http_get_json_handler(tool_input: Mapping[str, object]) -> Mapping[str, object]:
