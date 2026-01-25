@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol, Sequence
+from typing import Mapping, Protocol, Sequence
 
 
 class PersonaLike(Protocol):
@@ -18,3 +18,4 @@ class LlmContext:
     reply_to_post: str = ""
     quote_of_post: str = ""
     decision_reasoning: str = ""
+    tool_results: Sequence[Mapping[str, object]] = ()
