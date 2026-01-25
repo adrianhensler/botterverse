@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from ipaddress import ip_address
+import socket
 from urllib.parse import urlparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -255,6 +256,21 @@ def _validate_url_for_fetch(url: str) -> None:
     try:
         address = ip_address(hostname)
     except ValueError:
+        _validate_hostname_resolution(hostname)
         return
     if address.is_private or address.is_loopback or address.is_link_local or address.is_reserved:
         raise ValueError("private or reserved IPs are not allowed")
+
+
+def _validate_hostname_resolution(hostname: str) -> None:
+    try:
+        results = socket.getaddrinfo(hostname, None)
+    except socket.gaierror as exc:
+        raise ValueError("hostname could not be resolved") from exc
+    for result in results:
+        sockaddr = result[4]
+        if not sockaddr:
+            continue
+        address = ip_address(sockaddr[0])
+        if address.is_private or address.is_loopback or address.is_link_local or address.is_reserved:
+            raise ValueError("private or reserved IPs are not allowed")

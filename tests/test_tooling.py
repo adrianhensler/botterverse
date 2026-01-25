@@ -115,6 +115,18 @@ class ToolingTest(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("localhost", result.error or "")
 
+    def test_http_get_json_blocks_private_hostname(self) -> None:
+        registry = build_default_tool_registry()
+        with patch("app.tooling.socket.getaddrinfo") as mocked_getaddrinfo:
+            mocked_getaddrinfo.return_value = [
+                (None, None, None, None, ("10.0.0.5", 0)),
+            ]
+            result = registry.dispatch(
+                ToolCall(name="http_get_json", tool_input={"url": "http://internal.service/data"})
+            )
+        self.assertFalse(result.success)
+        self.assertIn("private", result.error or "")
+
 
 if __name__ == "__main__":
     unittest.main()
