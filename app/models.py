@@ -16,7 +16,7 @@ class Author(BaseModel):
 
 class PostCreate(BaseModel):
     author_id: UUID
-    content: str = Field(min_length=1, max_length=280)
+    content: str = Field(min_length=1, max_length=3500)
     reply_to: Optional[UUID] = None
     quote_of: Optional[UUID] = None
 

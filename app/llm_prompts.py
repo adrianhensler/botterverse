@@ -22,9 +22,14 @@ def build_messages(persona: PersonaLike, context: LlmContext) -> list[dict[str, 
 def build_system_prompt(persona: PersonaLike) -> str:
     interests = ", ".join(persona.interests) if persona.interests else ""
     return (
-        "You are writing a short social post (max 280 characters).\n"
+        "You are writing a short social post (max 3500 characters).\n"
         f"Persona tone: {persona.tone}.\n"
-        f"Persona interests: {interests}."
+        f"Persona interests: {interests}.\n"
+        "Avoid generic agreement openers (e.g., 'Absolutely agree', 'Totally agree', 'I agree'). "
+        "Start with a specific observation or useful detail. "
+        "If you are providing weather or news, present a short, clear factual block in 1–3 lines. "
+        "No decimals for temperatures or wind speeds. "
+        "Do not invent facts; if you are unsure, say so or ask a clarifying question."
     )
 
 
@@ -38,6 +43,13 @@ def build_user_prompt(context: LlmContext) -> str:
             "Tool results (JSON):\n"
             f"{json.dumps(context.tool_results, ensure_ascii=False)}\n"
             "Use tool results as the source of truth for real-world facts; cite or summarize them explicitly.\n"
+            "If a multi-day forecast is present, mention the number of days and ask a friendly follow-up question.\n"
+        )
+    else:
+        tool_results = (
+            "Tool results: (none)\n"
+            "If the user requests real-world facts (news, weather, time, live updates), "
+            "say you cannot fetch live data right now and ask for clarification or for integrations to be enabled.\n"
         )
 
     base_prompt = (
@@ -57,17 +69,25 @@ def build_user_prompt(context: LlmContext) -> str:
             f'"{context.reply_to_post}"\n\n'
             f"Your reasoning: {context.decision_reasoning}\n\n"
             "Now write a direct, conversational reply in your persona's voice. "
-            "Keep it natural and on-topic."
+            "Keep it natural and on-topic. Add at least one concrete detail or suggestion. "
+            "Do not start with generic agreement. "
+            "If you lack information, say what you don't know and avoid guessing."
         )
     elif context.quote_of_post:
         return base_prompt + (
             f"\nYou decided to QUOTE this post:\n"
             f'"{context.quote_of_post}"\n\n'
             f"Your reasoning: {context.decision_reasoning}\n\n"
-            "Write your commentary or reaction in your persona's voice."
+            "Write your commentary or reaction in your persona's voice. "
+            "Do not start with generic agreement; add a new detail or angle. "
+            "If you lack information, say what you don't know and avoid guessing."
         )
     else:
-        return base_prompt + "Write one post in the persona's voice."
+        return base_prompt + (
+            "Write one post in the persona's voice. "
+            "Avoid generic agreement and keep it specific. "
+            "If you lack information, say what you don't know and avoid guessing."
+        )
 
 
 def build_tool_selection_prompt(
@@ -99,6 +119,42 @@ def build_tool_selection_prompt(
         f"{tool_block}\n\n"
         "Respond ONLY with JSON in this shape:\n"
         '{"tool_name": "tool_name_or_null", "tool_input": {}}\n'
+        "JSON response:"
+    )
+
+
+def build_tool_requirement_prompt(
+    persona: PersonaLike,
+    context: LlmContext,
+    tools: Sequence[object],
+) -> str:
+    del persona
+    tool_lines = []
+    for tool in tools:
+        tool_lines.append(
+            f"- {tool.name}: {tool.description}\n"
+            f"  input_schema: {json.dumps(tool.input_schema, ensure_ascii=False)}"
+        )
+    tool_block = "\n".join(tool_lines) if tool_lines else "- (none)"
+    context_block = (
+        "User request context:\n"
+        f"- Latest event topic: {context.latest_event_topic}\n"
+        f"- Event context: {context.event_context or '(none)'}\n"
+        f"- Reply to post: {context.reply_to_post or '(none)'}\n"
+        f"- Quote of post: {context.quote_of_post or '(none)'}\n"
+        f"- Recent timeline snippets: {', '.join(context.recent_timeline_snippets) or '(none)'}\n"
+    )
+    return (
+        "You are a tool gatekeeper.\n"
+        "Decide whether a tool call is REQUIRED to answer accurately.\n"
+        "If the request needs live data (news, weather, time, live updates), require a tool call.\n"
+        "If the request asks for a multi-day or weekly forecast, choose weather_forecast.\n"
+        "If the request is general commentary or opinion, tools are optional.\n\n"
+        f"{context_block}\n"
+        "Available tools:\n"
+        f"{tool_block}\n\n"
+        "Respond ONLY with JSON in this shape:\n"
+        '{"tool_required": true/false, "tool_name": "tool_name_or_null", "tool_input": {}}\n'
         "JSON response:"
     )
 

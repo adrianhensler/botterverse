@@ -316,6 +316,118 @@ class BotDirector:
         # No candidate resulted in a reply
         return None
 
+    def plan_direct_mentions(
+        self,
+        personas: Sequence[Persona],
+        target_post: Post,
+        recent_posts: Sequence[Post],
+        store: object | None,
+        llm_client: object | None,
+    ) -> List[PlannedPost]:
+        """Plan immediate replies when a human explicitly mentions a bot."""
+        if store is None or llm_client is None:
+            return []
+        if not personas:
+            return []
+
+        recent_snippets = self._recent_timeline_snippets()
+        planned: List[PlannedPost] = []
+        for persona in personas:
+            if target_post.author_id == persona.id:
+                continue
+            if target_post.id in self.replied_post_ids[persona.id]:
+                continue
+            existing_replies = store.get_replies_to_post(target_post.id)
+            if any(reply.author_id == persona.id for reply in existing_replies):
+                continue
+
+            self.replied_post_ids[persona.id].add(target_post.id)
+            latest_event = self._latest_event()
+            memories = self._persona_memories(persona.id)
+            context = {
+                "latest_event_topic": target_post.content,
+                "recent_timeline_snippets": [target_post.content, *recent_snippets],
+                "reply_to_post": target_post.content,
+                "quote_of_post": "",
+                "event_context": self._event_context(latest_event) if latest_event else "",
+                "event_payload": latest_event.payload if latest_event else {},
+                "persona_memories": memories,
+                "decision_reasoning": "Direct mention in timeline.",
+            }
+            output, audit_entry = self._generate_post_content(persona, context)
+            planned.append(
+                PlannedPost(
+                    payload=PostCreate(
+                        author_id=persona.id,
+                        content=output,
+                        reply_to=target_post.id,
+                        quote_of=None,
+                    ),
+                    audit_entry=audit_entry,
+                )
+            )
+        return planned
+
+    def plan_direct_reply_to_bot(
+        self,
+        persona: Persona,
+        target_post: Post,
+        recent_posts: Sequence[Post],
+        store: object | None,
+        llm_client: object | None,
+    ) -> PlannedPost | None:
+        """Plan an immediate reply when a human responds directly to a bot."""
+        if store is None or llm_client is None:
+            return None
+        if target_post.author_id == persona.id:
+            return None
+        if target_post.id in self.replied_post_ids[persona.id]:
+            return None
+        existing_replies = store.get_replies_to_post(target_post.id)
+        if any(reply.author_id == persona.id for reply in existing_replies):
+            return None
+
+        author = store.get_author(target_post.author_id)
+        if not author or author.type != "human":
+            return None
+
+        from . import llm_client as llm_module
+
+        should_reply, reasoning = llm_module.decide_reply(
+            persona=persona,
+            post_content=target_post.content,
+            post_author=author.handle,
+            author_type=author.type,
+            is_direct_reply=True,
+            recent_timeline=[p.content for p in recent_posts[:5]],
+        )
+        if not should_reply:
+            return None
+
+        self.replied_post_ids[persona.id].add(target_post.id)
+        latest_event = self._latest_event()
+        memories = self._persona_memories(persona.id)
+        context = {
+            "latest_event_topic": target_post.content,
+            "recent_timeline_snippets": [target_post.content, *self._recent_timeline_snippets()],
+            "reply_to_post": target_post.content,
+            "quote_of_post": "",
+            "event_context": self._event_context(latest_event) if latest_event else "",
+            "event_payload": latest_event.payload if latest_event else {},
+            "persona_memories": memories,
+            "decision_reasoning": reasoning,
+        }
+        output, audit_entry = self._generate_post_content(persona, context)
+        return PlannedPost(
+            payload=PostCreate(
+                author_id=persona.id,
+                content=output,
+                reply_to=target_post.id,
+                quote_of=None,
+            ),
+            audit_entry=audit_entry,
+        )
+
     def _generate_post_content(self, persona: Persona, context: Dict[str, object]) -> tuple[str, AuditEntry]:
         result = generate_post_with_audit(persona, context)
         entry = AuditEntry(
@@ -324,6 +436,10 @@ class BotDirector:
             output=result.output,
             timestamp=datetime.now(timezone.utc),
             persona_id=persona.id,
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+            total_tokens=result.total_tokens,
+            cost_usd=result.cost_usd,
         )
         return result.output, entry
 
@@ -451,9 +567,10 @@ class BotDirector:
 
     def _personas_for_event(self, event: BotEvent) -> List[Persona]:
         kind_map = {
-            "news": {"newswire", "globaldesk", "civicwatch", "techbrief", "marketminute"},
-            "weather": {"weatherguy", "commutecheck", "farmreport"},
+            "news": {"newsbot", "globaldesk", "civicwatch", "techbrief", "marketminute"},
+            "weather": {"weatherbot"},
             "sports": {"stadiumpulse", "statline"},
+            "github": {"githubbot"},
         }
         if event.kind in kind_map:
             handles = kind_map[event.kind]

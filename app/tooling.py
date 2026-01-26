@@ -11,9 +11,15 @@ from datetime import datetime, timezone
 from typing import Callable, Mapping, Sequence
 
 import requests
+import httpx
 
 from .integrations.news import get_news_provider, search_news
-from .integrations.weather import fetch_weather_with_retry, normalize_weather_units, validate_weather_location
+from .integrations.weather import (
+    fetch_weather_forecast,
+    fetch_weather_with_retry,
+    normalize_weather_units,
+    validate_weather_location,
+)
 from .llm_prompts import build_tool_selection_prompt
 from .llm_types import LlmContext, PersonaLike
 from .model_router import ModelRouter
@@ -121,6 +127,9 @@ class ToolRouter:
     def __init__(self, registry: ToolRegistry) -> None:
         self._registry = registry
 
+    def list_tools(self) -> Sequence[ToolSchema]:
+        return self._registry.list_tools()
+
     def route_and_execute(
         self,
         persona: PersonaLike,
@@ -144,6 +153,12 @@ class ToolRouter:
         result = self._registry.dispatch(call, model_router=model_router)
         return [result.as_dict()]
 
+    def dispatch_call(self, call: ToolCall, model_router: ModelRouter | None = None) -> ToolResult:
+        return self._registry.dispatch(call, model_router=model_router)
+
+    def heuristic_call(self, context: LlmContext) -> ToolCall | None:
+        return _heuristic_tool_call(context, self._registry)
+
     def _select_tool_call(
         self,
         persona: PersonaLike,
@@ -156,7 +171,7 @@ class ToolRouter:
             return _heuristic_tool_call(context, self._registry)
         prompt = build_tool_selection_prompt(persona, context, self._registry.list_tools())
         response = adapter.generate(persona, context, prompt, model_name)
-        return _parse_tool_selection(response, self._registry)
+        return _parse_tool_selection(_extract_content(response), self._registry)
 
 
 def _validate_tool_input(schema: Mapping[str, object], tool_input: Mapping[str, object]) -> str | None:
@@ -192,6 +207,14 @@ def _parse_tool_selection(response: str, registry: ToolRegistry) -> ToolCall | N
     return ToolCall(name=str(tool_name), tool_input=dict(tool_input))
 
 
+def _extract_content(response: object) -> str:
+    if isinstance(response, dict):
+        content = response.get("content")
+        if isinstance(content, str):
+            return content
+    return str(response)
+
+
 def _heuristic_tool_call(context: LlmContext, registry: ToolRegistry) -> ToolCall | None:
     raw_text = " ".join(
         [
@@ -206,6 +229,10 @@ def _heuristic_tool_call(context: LlmContext, registry: ToolRegistry) -> ToolCal
     tool_names = {tool.name for tool in registry.list_tools()}
     if "current_time" in tool_names and ("time" in text or "date" in text):
         return ToolCall(name="current_time", tool_input={})
+    if "weather_forecast" in tool_names and ("forecast" in text or "week" in text or "weekly" in text):
+        location = _extract_weather_location(raw_text)
+        if location:
+            return ToolCall(name="weather_forecast", tool_input={"location": location})
     if "weather" in tool_names:
         location = _extract_weather_location(raw_text)
         if location:
@@ -288,6 +315,19 @@ def build_default_tool_registry() -> ToolRegistry:
             },
         ),
         ToolSchema(
+            name="weather_forecast",
+            description="Fetch a multi-day weather forecast for a location mentioned in the user request.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"},
+                    "units": {"type": "string", "enum": ["metric", "imperial", "standard"]},
+                    "timeout_s": {"type": "number"},
+                },
+                "required": ["location"],
+            },
+        ),
+        ToolSchema(
             name="http_get_json",
             description="Fetch JSON data from a URL via HTTP GET.",
             input_schema={
@@ -317,6 +357,7 @@ def build_default_tool_registry() -> ToolRegistry:
     handlers = {
         "current_time": _current_time_handler,
         "weather": _weather_handler,
+        "weather_forecast": _weather_forecast_handler,
         "http_get_json": _http_get_json_handler,
         "news_search": _news_search_handler,
     }
@@ -382,6 +423,63 @@ def _weather_handler(tool_input: Mapping[str, object]) -> Mapping[str, object]:
             }
 
     return {"status": "ok", **weather}
+
+
+def _weather_forecast_handler(tool_input: Mapping[str, object]) -> Mapping[str, object]:
+    api_key = os.getenv("OPENWEATHER_API_KEY", "")
+    if not api_key:
+        raise ValueError("weather API key not configured")
+
+    location_raw = str(tool_input.get("location", ""))
+    units = normalize_weather_units(str(tool_input.get("units", "")))
+    timeout = tool_input.get("timeout_s", WEATHER_TIMEOUT_SECONDS)
+
+    try:
+        timeout_value = float(timeout)
+    except (TypeError, ValueError):
+        timeout_value = WEATHER_TIMEOUT_SECONDS
+    timeout_value = max(1.0, min(timeout_value, 20.0))
+
+    try:
+        forecast = fetch_weather_forecast(api_key, location_raw, units=units, timeout_s=timeout_value)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 401:
+            return {
+                "status": "auth_error",
+                "message": "Weather API key is invalid or not configured",
+                "location": location_raw,
+                "units": units,
+            }
+        if exc.response.status_code == 429:
+            return {
+                "status": "rate_limited",
+                "message": "Weather API rate limit exceeded, try again later",
+                "location": location_raw,
+                "units": units,
+            }
+        if exc.response.status_code == 404:
+            return {
+                "status": "location_not_found",
+                "location": location_raw,
+                "suggestion": "Try specifying city and country (e.g., 'Halifax, Canada')",
+                "units": units,
+            }
+        return {
+            "status": "unavailable",
+            "message": "Weather service temporarily unavailable",
+            "location": location_raw,
+            "units": units,
+        }
+
+    if not forecast:
+        return {
+            "status": "unavailable",
+            "message": "Weather forecast unavailable",
+            "location": location_raw,
+            "units": units,
+        }
+
+    return {"status": "ok", **forecast}
 
 
 def _http_get_json_handler(tool_input: Mapping[str, object]) -> Mapping[str, object]:
@@ -457,7 +555,7 @@ Return ONLY the enriched query (max 100 characters), nothing else."""
     )
 
     try:
-        enriched = adapter.generate(None, context, prompt, route.model_name)
+        enriched = _extract_content(adapter.generate(None, context, prompt, route.model_name))
         enriched = enriched.strip().strip('"').strip("'")[:100]
 
         # Build guidance message for very vague queries
@@ -480,7 +578,7 @@ def _news_search_handler(tool_input: Mapping[str, object]) -> Mapping[str, objec
     query = str(tool_input.get("query", "")).strip()
     if not query:
         raise ValueError("query is required")
-    limit = tool_input.get("limit", 3)
+    limit = tool_input.get("limit", 8)
     timeout = tool_input.get("timeout_s", 10.0)
     model_router = tool_input.get("_model_router")  # Passed from route_and_execute
 
