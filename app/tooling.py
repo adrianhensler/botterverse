@@ -65,7 +65,7 @@ class ToolRegistry:
     def list_tools(self) -> Sequence[ToolSchema]:
         return list(self._tools.values())
 
-    def dispatch(self, call: ToolCall) -> ToolResult:
+    def dispatch(self, call: ToolCall, model_router: ModelRouter | None = None) -> ToolResult:
         tool = self._tools.get(call.name)
         if tool is None:
             return ToolResult(
@@ -94,7 +94,12 @@ class ToolRegistry:
                 error=error,
             )
         try:
-            output = handler(call.tool_input)
+            # Inject model_router into tool_input for handlers that need it
+            enriched_input = dict(call.tool_input)
+            if model_router is not None:
+                enriched_input["_model_router"] = model_router
+
+            output = handler(enriched_input)
             return ToolResult(
                 name=call.name,
                 tool_input=call.tool_input,
@@ -136,7 +141,7 @@ class ToolRouter:
         )
         if call is None:
             return []
-        result = self._registry.dispatch(call)
+        result = self._registry.dispatch(call, model_router=model_router)
         return [result.as_dict()]
 
     def _select_tool_call(
@@ -392,12 +397,99 @@ def _http_get_json_handler(tool_input: Mapping[str, object]) -> Mapping[str, obj
         response.close()
 
 
+def _enrich_news_query(query: str, model_router: ModelRouter) -> tuple[str, str]:
+    """Enrich vague news queries with temporal and contextual information.
+
+    Returns:
+        (enriched_query, guidance_message) tuple
+        - enriched_query: Enhanced query for better search results
+        - guidance_message: Optional guidance for user on better queries (empty if query was specific)
+    """
+    # Check if query is already specific enough
+    if len(query) > 30:
+        return (query, "")
+
+    # Detect very vague queries that need user guidance
+    vague_patterns = [
+        r"^(the\s+)?news$",
+        r"^what'?s?\s+(the\s+)?news\??$",
+        r"^latest\s+news$",
+        r"^any\s+news$",
+    ]
+    is_very_vague = any(re.match(pattern, query.lower()) for pattern in vague_patterns)
+
+    # Build enrichment prompt
+    now = datetime.now(timezone.utc)
+    date_str = now.strftime("%B %d, %Y")
+
+    prompt = f"""Enrich this news search query to get better, more specific results.
+
+Original query: "{query}"
+Current date: {date_str}
+
+Transform vague queries into specific, newsworthy search terms. Add:
+- Temporal context (today's date, "this week", "January 2026")
+- Geographic context if implicit ("United States", "North America")
+- Topical focus if clear from keywords
+
+Examples:
+- "the news" → "top headlines United States January 25 2026"
+- "latest tech news" → "major technology developments January 2026"
+- "sports news" → "sports highlights and updates January 2026"
+- "news in Halifax" → "Halifax Nova Scotia news updates January 2026"
+
+Return ONLY the enriched query (max 100 characters), nothing else."""
+
+    # Use economy tier for enrichment
+    route = model_router.economy_route()
+    adapter = model_router.adapter_for(route.provider)
+
+    # Create minimal context for generation
+    from .llm_types import LlmContext
+    context = LlmContext(
+        latest_event_topic="",
+        event_context="",
+        reply_to_post="",
+        quote_of_post="",
+        recent_timeline_snippets=[],
+        tool_results=[],
+        persona_memories=[],
+    )
+
+    try:
+        enriched = adapter.generate(None, context, prompt, route.model_name)
+        enriched = enriched.strip().strip('"').strip("'")[:100]
+
+        # Build guidance message for very vague queries
+        guidance = ""
+        if is_very_vague:
+            guidance = "💡 Tip: For better results, try asking about specific topics like 'tech news', 'sports news', or 'news in [city]'. "
+
+        return (enriched, guidance)
+    except Exception:
+        # Fallback: basic enrichment without LLM
+        if "tech" in query.lower():
+            return (f"technology news {date_str}", "")
+        elif "sports" in query.lower():
+            return (f"sports news {date_str}", "")
+        else:
+            return (f"{query} {date_str}", "")
+
+
 def _news_search_handler(tool_input: Mapping[str, object]) -> Mapping[str, object]:
     query = str(tool_input.get("query", "")).strip()
     if not query:
         raise ValueError("query is required")
     limit = tool_input.get("limit", 3)
     timeout = tool_input.get("timeout_s", 10.0)
+    model_router = tool_input.get("_model_router")  # Passed from route_and_execute
+
+    # Enrich query for better results
+    original_query = query
+    guidance_message = ""
+    if model_router and isinstance(model_router, ModelRouter):
+        query, guidance_message = _enrich_news_query(query, model_router)
+
     try:
         limit_value = int(limit)
     except (TypeError, ValueError):
@@ -415,7 +507,9 @@ def _news_search_handler(tool_input: Mapping[str, object]) -> Mapping[str, objec
         provider=provider,
     )
     return {
-        "query": query,
+        "query": original_query,
+        "enriched_query": query,
+        "guidance": guidance_message,
         "provider": provider.name,
         "results": results,
     }
