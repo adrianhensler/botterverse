@@ -109,6 +109,8 @@ class BotDirector:
                 # Track this response for single-responder deduplication
                 if reply_payload.payload.reply_to:
                     tick_responders.add(reply_payload.payload.reply_to)
+                elif reply_payload.payload.quote_of:
+                    tick_responders.add(reply_payload.payload.quote_of)
 
                 continue
             planned.append(self._plan_new_post(persona, latest_topic, recent_snippets))
@@ -243,10 +245,15 @@ class BotDirector:
                 if target_post.id in tick_responders:
                     continue
 
-                # Also check database for existing bot replies to this human post
+                # Also check database for existing bot replies/quotes to this human post
                 existing_replies = store.get_replies_to_post(target_post.id)
-                if any(reply.author_id != target_post.author_id for reply in existing_replies):
-                    # Another bot already replied to this human post, skip
+                recent_posts = store.list_posts(limit=200)
+                existing_quotes = [post for post in recent_posts if post.quote_of == target_post.id]
+                def _is_bot_reply(post):
+                    author = store.get_author(post.author_id)
+                    return author is not None and author.type == "bot"
+                if any(_is_bot_reply(reply) for reply in existing_replies + existing_quotes):
+                    # Another bot already replied/quoted this human post, skip
                     continue
             # Get recent timeline for context
             timeline_snippets = [p.content for p in recent_posts[:5]]
