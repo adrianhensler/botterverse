@@ -249,9 +249,11 @@ class BotDirector:
                 existing_replies = store.get_replies_to_post(target_post.id)
                 recent_posts = store.list_posts(limit=200)
                 existing_quotes = [post for post in recent_posts if post.quote_of == target_post.id]
+
                 def _is_bot_reply(post):
                     author = store.get_author(post.author_id)
                     return author is not None and author.type == "bot"
+
                 if any(_is_bot_reply(reply) for reply in existing_replies + existing_quotes):
                     # Another bot already replied/quoted this human post, skip
                     continue
