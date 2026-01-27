@@ -386,6 +386,10 @@ def _create_planned_posts(planned: List[PlannedPost]) -> List[Post]:
                     timestamp=planned_post.audit_entry.timestamp,
                     persona_id=planned_post.audit_entry.persona_id,
                     post_id=created_post.id,
+                    prompt_tokens=planned_post.audit_entry.prompt_tokens,
+                    completion_tokens=planned_post.audit_entry.completion_tokens,
+                    total_tokens=planned_post.audit_entry.total_tokens,
+                    cost_usd=planned_post.audit_entry.cost_usd,
                 )
             )
     return created
@@ -502,6 +506,10 @@ def _maybe_summarize_dm_thread(
                 persona_id=persona.id,
                 post_id=None,
                 dm_id=None,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+                total_tokens=result.total_tokens,
+                cost_usd=result.cost_usd,
             )
         )
         last_dm_summary_ids[thread_key] = full_thread[-1].id
@@ -574,6 +582,10 @@ def run_dm_reply_tick() -> dict:
                     timestamp=datetime.now(timezone.utc),
                     persona_id=persona.id,
                     dm_id=created_message.id,
+                    prompt_tokens=result.prompt_tokens,
+                    completion_tokens=result.completion_tokens,
+                    total_tokens=result.total_tokens,
+                    cost_usd=result.cost_usd,
                 )
             )
             last_processed_dm_per_thread[thread_key] = latest_message.id
@@ -795,6 +807,57 @@ async def list_authors() -> List[Author]:
     return store.list_authors()
 
 
+def _spend_summary(limit: int = 5000) -> dict:
+    entries = store.list_audit_entries(limit=limit)
+    totals = {
+        "cost_usd": 0.0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "entries": len(entries),
+    }
+    by_persona: Dict[UUID, dict] = {}
+    for entry in entries:
+        if entry.cost_usd:
+            totals["cost_usd"] += entry.cost_usd
+        if entry.prompt_tokens:
+            totals["prompt_tokens"] += entry.prompt_tokens
+        if entry.completion_tokens:
+            totals["completion_tokens"] += entry.completion_tokens
+        if entry.total_tokens:
+            totals["total_tokens"] += entry.total_tokens
+        persona_stats = by_persona.setdefault(
+            entry.persona_id,
+            {
+                "persona_id": entry.persona_id,
+                "cost_usd": 0.0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "entries": 0,
+            },
+        )
+        persona_stats["entries"] += 1
+        if entry.cost_usd:
+            persona_stats["cost_usd"] += entry.cost_usd
+        if entry.prompt_tokens:
+            persona_stats["prompt_tokens"] += entry.prompt_tokens
+        if entry.completion_tokens:
+            persona_stats["completion_tokens"] += entry.completion_tokens
+        if entry.total_tokens:
+            persona_stats["total_tokens"] += entry.total_tokens
+
+    persona_rows = []
+    for persona_id, stats in by_persona.items():
+        author = store.get_author(persona_id)
+        stats["handle"] = author.handle if author else str(persona_id)
+        stats["display_name"] = author.display_name if author else str(persona_id)
+        persona_rows.append(stats)
+    persona_rows.sort(key=lambda row: (row["cost_usd"], row["total_tokens"]), reverse=True)
+
+    return {"totals": totals, "by_persona": persona_rows}
+
+
 @app.post("/posts", response_model=Post)
 async def create_post(payload: PostCreate) -> Post:
     if store.get_author(payload.author_id) is None:
@@ -818,6 +881,24 @@ async def timeline(limit: int = 50, ranked: bool = False) -> List[TimelineEntry]
             continue
         entries.append(TimelineEntry(post=post, author=author))
     return entries
+
+
+@app.get("/spend")
+async def spend_summary(limit: int = 5000) -> dict:
+    return _spend_summary(limit=limit)
+
+
+@app.get("/spend.html", response_class=HTMLResponse)
+async def spend_dashboard(request: Request, limit: int = 5000):
+    summary = _spend_summary(limit=limit)
+    return templates.TemplateResponse(
+        "spend.html",
+        {
+            "request": request,
+            "totals": summary["totals"],
+            "rows": summary["by_persona"],
+        },
+    )
 
 
 @app.post("/posts/{post_id}/reply", response_model=Post)

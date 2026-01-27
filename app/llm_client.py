@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import json
 import logging
@@ -33,6 +34,10 @@ class LlmResult:
     output: str
     model_name: str
     used_fallback: bool
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    cost_usd: float | None = None
 
 
 @dataclass(frozen=True)
@@ -40,6 +45,40 @@ class ToolRequirement:
     required: bool
     tool_name: str | None
     tool_input: dict[str, object]
+
+
+def _load_pricing_map() -> dict[str, dict[str, float]]:
+    raw = os.getenv("BOTTERVERSE_PRICING_JSON", "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("Invalid BOTTERVERSE_PRICING_JSON; spend estimates disabled.")
+        return {}
+    pricing = {}
+    if isinstance(data, dict):
+        for model, rates in data.items():
+            if isinstance(rates, dict):
+                pricing[str(model)] = {
+                    "prompt": float(rates.get("prompt_per_million", rates.get("input_per_million", 0.0)) or 0.0),
+                    "completion": float(rates.get("completion_per_million", rates.get("output_per_million", 0.0)) or 0.0),
+                }
+    return pricing
+
+
+def _estimate_cost_usd(model_name: str, prompt_tokens: int | None, completion_tokens: int | None) -> float | None:
+    if prompt_tokens is None or completion_tokens is None:
+        return None
+    pricing = _load_pricing_map()
+    rates = pricing.get(model_name)
+    if not rates:
+        return None
+    prompt_rate = rates.get("prompt", 0.0)
+    completion_rate = rates.get("completion", 0.0)
+    if prompt_rate <= 0 and completion_rate <= 0:
+        return None
+    return (prompt_tokens / 1_000_000.0) * prompt_rate + (completion_tokens / 1_000_000.0) * completion_rate
 
 
 def _extract_generation(response: object) -> tuple[str, dict | None]:
@@ -222,7 +261,20 @@ def generate_post_with_audit(persona: PersonaLike, context: Mapping[str, object]
             output = _apply_tool_grounding(output, llm_context.tool_results)
         output = _truncate_to_limit(output)
         model_name = f"{resolved_route.provider}:{resolved_route.model_name}"
-        return LlmResult(prompt=prompt, output=output, model_name=model_name, used_fallback=used_fallback)
+        prompt_tokens = usage.get("prompt_tokens") if usage else None
+        completion_tokens = usage.get("completion_tokens") if usage else None
+        total_tokens = usage.get("total_tokens") if usage else None
+        cost_usd = _estimate_cost_usd(resolved_route.model_name, prompt_tokens, completion_tokens)
+        return LlmResult(
+            prompt=prompt,
+            output=output,
+            model_name=model_name,
+            used_fallback=used_fallback,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            cost_usd=cost_usd,
+        )
     except Exception:
         fallback_topic = context.get("latest_event_topic", "the timeline")
         fallback = f"[{persona.tone}] Thoughts on {fallback_topic}."
@@ -453,7 +505,20 @@ def generate_dm_summary_with_audit(
         if not generated.strip():
             raise ValueError("empty response")
         output = _truncate_to_limit(generated, SUMMARY_MAX_CHARACTERS)
-        return LlmResult(prompt=prompt, output=output, model_name=model_name, used_fallback=False)
+        prompt_tokens = usage.get("prompt_tokens") if usage else None
+        completion_tokens = usage.get("completion_tokens") if usage else None
+        total_tokens = usage.get("total_tokens") if usage else None
+        cost_usd = _estimate_cost_usd(route.model_name, prompt_tokens, completion_tokens)
+        return LlmResult(
+            prompt=prompt,
+            output=output,
+            model_name=model_name,
+            used_fallback=False,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            cost_usd=cost_usd,
+        )
     except Exception:
         summary = _summarize_locally(thread_snippets)
         output = _truncate_to_limit(summary, SUMMARY_MAX_CHARACTERS)
