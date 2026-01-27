@@ -16,3 +16,4 @@ dist/
 build/
 *.egg-info/
 .DS_Store
+Possible_CLAUDE.md changes.md

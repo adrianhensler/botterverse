@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import json
 import logging
@@ -33,6 +34,184 @@ class LlmResult:
     output: str
     model_name: str
     used_fallback: bool
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    cost_usd: float | None = None
+
+
+@dataclass(frozen=True)
+class ToolRequirement:
+    required: bool
+    tool_name: str | None
+    tool_input: dict[str, object]
+
+
+def _load_pricing_map() -> dict[str, dict[str, float]]:
+    raw = os.getenv("BOTTERVERSE_PRICING_JSON", "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("Invalid BOTTERVERSE_PRICING_JSON; spend estimates disabled.")
+        return {}
+    pricing = {}
+    if isinstance(data, dict):
+        for model, rates in data.items():
+            if isinstance(rates, dict):
+                pricing[str(model)] = {
+                    "prompt": float(rates.get("prompt_per_million", rates.get("input_per_million", 0.0)) or 0.0),
+                    "completion": float(rates.get("completion_per_million", rates.get("output_per_million", 0.0)) or 0.0),
+                }
+    return pricing
+
+
+def _estimate_cost_usd(model_name: str, prompt_tokens: int | None, completion_tokens: int | None) -> float | None:
+    if prompt_tokens is None or completion_tokens is None:
+        return None
+    pricing = _load_pricing_map()
+    rates = pricing.get(model_name)
+    if not rates:
+        return None
+    prompt_rate = rates.get("prompt", 0.0)
+    completion_rate = rates.get("completion", 0.0)
+    if prompt_rate <= 0 and completion_rate <= 0:
+        return None
+    return (prompt_tokens / 1_000_000.0) * prompt_rate + (completion_tokens / 1_000_000.0) * completion_rate
+
+
+def _extract_generation(response: object) -> tuple[str, dict | None]:
+    if isinstance(response, dict):
+        content = response.get("content")
+        usage = response.get("usage")
+        text = content if isinstance(content, str) else ""
+        return text, usage if isinstance(usage, dict) else None
+    return str(response), None
+
+
+def _extract_tool_data(tool_results: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    news_items: list[dict[str, object]] = []
+    weather: dict[str, object] | None = None
+    urls: set[str] = set()
+    for result in tool_results:
+        name = result.get("name")
+        output = result.get("output")
+        if name == "news_search":
+            items = None
+            if isinstance(output, list):
+                items = output
+            elif isinstance(output, dict):
+                results = output.get("results")
+                if isinstance(results, list):
+                    items = results
+            if items:
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    news_items.append(item)
+                    url = item.get("url")
+                    if isinstance(url, str) and url:
+                        urls.add(url)
+        elif name in {"weather", "weather_forecast"} and isinstance(output, dict):
+            weather = output
+    return {"news_items": news_items, "weather": weather, "urls": urls}
+
+
+def _strip_untrusted_urls(text: str, allowed_urls: set[str]) -> str:
+    if not text:
+        return text
+    url_pattern = re.compile(r"https?://[^\s)]+")
+    def replacer(match: re.Match[str]) -> str:
+        url = match.group(0)
+        return url if url in allowed_urls else ""
+    stripped = url_pattern.sub(replacer, text)
+    stripped = re.sub(r"\s+\)", ")", stripped)
+    stripped = re.sub(r"\s{2,}", " ", stripped).strip()
+    return stripped
+
+
+def _format_news_block(items: Sequence[dict[str, object]], limit: int = 8) -> str:
+    if not items:
+        return ""
+    lines = ["Headlines:"]
+    for item in items[:limit]:
+        title = str(item.get("title") or "Untitled").strip()
+        source = str(item.get("source") or "").strip()
+        published = str(item.get("published_at") or "").strip()
+        snippet = str(item.get("snippet") or "").strip()
+        url = str(item.get("url") or "").strip()
+        meta_parts = [part for part in [source, published] if part]
+        meta = f" ({' • '.join(meta_parts)})" if meta_parts else ""
+        suffix = f" — {url}" if url else ""
+        lines.append(f"- {title}{meta}{suffix}")
+        if snippet:
+            lines.append(f"  {snippet}")
+    return "\n".join(lines)
+
+
+def _format_weather_block(weather: Mapping[str, object]) -> str:
+    if not weather:
+        return ""
+    if weather.get("status") and weather.get("status") != "ok":
+        return ""
+    daily = weather.get("daily")
+    if isinstance(daily, list) and daily:
+        units = str(weather.get("units") or "").lower()
+        unit_label = "°C" if units == "metric" else "°F" if units == "imperial" else ""
+        day_count = min(len(daily), 7)
+        lines = [f"{day_count}-day forecast ({weather.get('location', 'Unknown')}):"]
+        for day in daily[:7]:
+            if not isinstance(day, dict):
+                continue
+            summary = str(day.get("summary") or "weather").strip()
+            temp_min = day.get("temp_min")
+            temp_max = day.get("temp_max")
+            date = day.get("date")
+            date_str = ""
+            if isinstance(date, (int, float)):
+                date_str = datetime.fromtimestamp(float(date), tz=timezone.utc).strftime("%a %b %d")
+            if temp_min is not None and temp_max is not None:
+                min_val = round(float(temp_min))
+                max_val = round(float(temp_max))
+                lines.append(f"- {date_str}: {summary}, {min_val}{unit_label}–{max_val}{unit_label}")
+            else:
+                lines.append(f"- {date_str}: {summary}")
+        return "\n".join(lines)
+    location = str(weather.get("location") or "Unknown location")
+    summary = str(weather.get("summary") or "weather update")
+    units = str(weather.get("units") or "").lower()
+    temp = weather.get("temperature")
+    feels = weather.get("feels_like")
+    humidity = weather.get("humidity")
+    wind = weather.get("wind_speed")
+    unit_label = "°C" if units == "metric" else "°F" if units == "imperial" else ""
+    parts = [f"{summary} in {location}"]
+    if temp is not None:
+        parts.append(f"temp {round(float(temp))}{unit_label}")
+    if feels is not None:
+        parts.append(f"feels like {round(float(feels))}{unit_label}")
+    if humidity is not None:
+        parts.append(f"humidity {round(float(humidity))}%")
+    if wind is not None:
+        parts.append(f"wind {round(float(wind))}")
+    return "Weather: " + ", ".join(parts)
+
+
+def _apply_tool_grounding(output: str, tool_results: Sequence[Mapping[str, object]]) -> str:
+    data = _extract_tool_data(tool_results)
+    allowed_urls = data["urls"]
+    grounded = _strip_untrusted_urls(output, allowed_urls) if allowed_urls else output
+    news_block = _format_news_block(data["news_items"])
+    weather_block = _format_weather_block(data["weather"])
+    additions = [block for block in [news_block, weather_block] if block]
+    if additions:
+        grounded = grounded.strip()
+        if grounded:
+            grounded = f"{grounded}\n\n" + "\n\n".join(additions)
+        else:
+            grounded = "\n\n".join(additions)
+    return grounded
 
 
 @dataclass(frozen=True)
@@ -230,7 +409,20 @@ def generate_post_with_audit(persona: PersonaLike, context: Mapping[str, object]
             output = _apply_tool_grounding(output, llm_context.tool_results)
         output = _truncate_to_limit(output)
         model_name = f"{resolved_route.provider}:{resolved_route.model_name}"
-        return LlmResult(prompt=prompt, output=output, model_name=model_name, used_fallback=used_fallback)
+        prompt_tokens = usage.get("prompt_tokens") if usage else None
+        completion_tokens = usage.get("completion_tokens") if usage else None
+        total_tokens = usage.get("total_tokens") if usage else None
+        cost_usd = _estimate_cost_usd(resolved_route.model_name, prompt_tokens, completion_tokens)
+        return LlmResult(
+            prompt=prompt,
+            output=output,
+            model_name=model_name,
+            used_fallback=used_fallback,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            cost_usd=cost_usd,
+        )
     except Exception:
         fallback_topic = context.get("latest_event_topic", "the timeline")
         fallback = f"[{persona.tone}] Thoughts on {fallback_topic}."
@@ -461,7 +653,20 @@ def generate_dm_summary_with_audit(
         if not generated.strip():
             raise ValueError("empty response")
         output = _truncate_to_limit(generated, SUMMARY_MAX_CHARACTERS)
-        return LlmResult(prompt=prompt, output=output, model_name=model_name, used_fallback=False)
+        prompt_tokens = usage.get("prompt_tokens") if usage else None
+        completion_tokens = usage.get("completion_tokens") if usage else None
+        total_tokens = usage.get("total_tokens") if usage else None
+        cost_usd = _estimate_cost_usd(route.model_name, prompt_tokens, completion_tokens)
+        return LlmResult(
+            prompt=prompt,
+            output=output,
+            model_name=model_name,
+            used_fallback=False,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            cost_usd=cost_usd,
+        )
     except Exception:
         summary = _summarize_locally(thread_snippets)
         output = _truncate_to_limit(summary, SUMMARY_MAX_CHARACTERS)

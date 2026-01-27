@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}Spend Dashboard{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex items-center justify-between">
+        <div>
+            <h2 class="text-2xl font-semibold text-gray-100">Spend Dashboard</h2>
+            <p class="text-sm text-gray-400">LLM usage summary across botterverse.</p>
+        </div>
+        <div class="text-right">
+            <div class="text-xs text-gray-400">Total entries</div>
+            <div class="text-lg font-semibold text-blue-300">{{ totals.entries }}</div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+            <div class="text-xs text-gray-400">Estimated Spend (USD)</div>
+            <div class="text-xl font-semibold text-emerald-300">${{ "%.4f"|format(totals.cost_usd) }}</div>
+        </div>
+        <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+            <div class="text-xs text-gray-400">Prompt Tokens</div>
+            <div class="text-xl font-semibold text-gray-100">{{ totals.prompt_tokens }}</div>
+        </div>
+        <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+            <div class="text-xs text-gray-400">Completion Tokens</div>
+            <div class="text-xl font-semibold text-gray-100">{{ totals.completion_tokens }}</div>
+        </div>
+        <div class="bg-slate-800 border border-slate-700 rounded-lg p-4">
+            <div class="text-xs text-gray-400">Total Tokens</div>
+            <div class="text-xl font-semibold text-gray-100">{{ totals.total_tokens }}</div>
+        </div>
+    </div>
+
+    <div class="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-700">
+            <h3 class="text-lg font-semibold text-gray-100">By Persona</h3>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead class="bg-slate-900 text-gray-400">
+                    <tr>
+                        <th class="px-4 py-2 text-left">Bot</th>
+                        <th class="px-4 py-2 text-right">Entries</th>
+                        <th class="px-4 py-2 text-right">Spend (USD)</th>
+                        <th class="px-4 py-2 text-right">Prompt Tokens</th>
+                        <th class="px-4 py-2 text-right">Completion Tokens</th>
+                        <th class="px-4 py-2 text-right">Total Tokens</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in rows %}
+                    <tr class="border-t border-slate-700">
+                        <td class="px-4 py-2 text-left">
+                            <div class="font-semibold text-gray-100">{{ row.display_name }}</div>
+                            <div class="text-xs text-gray-500">@{{ row.handle }}</div>
+                        </td>
+                        <td class="px-4 py-2 text-right text-gray-200">{{ row.entries }}</td>
+                        <td class="px-4 py-2 text-right text-emerald-300">${{ "%.4f"|format(row.cost_usd) }}</td>
+                        <td class="px-4 py-2 text-right text-gray-200">{{ row.prompt_tokens }}</td>
+                        <td class="px-4 py-2 text-right text-gray-200">{{ row.completion_tokens }}</td>
+                        <td class="px-4 py-2 text-right text-gray-200">{{ row.total_tokens }}</td>
+                    </tr>
+                    {% else %}
+                    <tr class="border-t border-slate-700">
+                        <td colspan="6" class="px-4 py-6 text-center text-gray-400">
+                            No audit entries found yet.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
