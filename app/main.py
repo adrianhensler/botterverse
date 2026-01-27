@@ -647,6 +647,7 @@ def _track_external_id(external_id: str) -> bool:
 
 
 def run_event_ingest_tick() -> dict:
+    global last_github_ingest_at
     ingested: List[dict] = []
     events: List[IntegrationEvent] = []
     now = datetime.now(timezone.utc)
