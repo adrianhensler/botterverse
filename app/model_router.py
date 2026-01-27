@@ -38,7 +38,7 @@ class ProviderAdapter(Protocol):
         context: LlmContext,
         prompt: str,
         model_name: str,
-    ) -> str:
+    ) -> object:
         ...
 
 
@@ -72,7 +72,7 @@ class OpenRouterAdapter:
         context: LlmContext,
         prompt: str,
         model_name: str,
-    ) -> str:
+    ) -> object:
         if not self.api_key:
             raise ValueError("OPENROUTER_API_KEY is not set")
         messages = _prompt_to_messages(prompt) if prompt else build_messages(persona, context)
@@ -91,7 +91,10 @@ class OpenRouterAdapter:
         )
         response.raise_for_status()
         data = response.json()
-        return data["choices"][0]["message"]["content"]
+        return {
+            "content": data["choices"][0]["message"]["content"],
+            "usage": data.get("usage"),
+        }
 
 
 def _prompt_to_messages(prompt: str) -> list[dict[str, str]]:
@@ -136,14 +139,14 @@ class LocalAdapter:
         context: LlmContext,
         prompt: str,
         model_name: str,
-    ) -> str:
+    ) -> object:
         del prompt
         del model_name
         topic = context.latest_event_topic or "the timeline"
         interest = random.choice(persona.interests) if persona.interests else "current events"
         reaction = random.choice(_REACTIONS)
         template = random.choice(_LOCAL_TEMPLATES)
-        return template.format(topic=topic, interest=interest, reaction=reaction)
+        return {"content": template.format(topic=topic, interest=interest, reaction=reaction), "usage": None}
 
 
 class ModelRouter:

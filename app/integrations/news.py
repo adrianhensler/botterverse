@@ -23,6 +23,7 @@ class NewsHeadline:
     url: str | None
     source: str | None
     published_at: str | None
+    snippet: str | None = None
 
     def as_dict(self) -> dict[str, str | None]:
         return {
@@ -30,6 +31,7 @@ class NewsHeadline:
             "url": self.url,
             "source": self.source,
             "published_at": self.published_at,
+            "snippet": self.snippet,
         }
 
 
@@ -64,12 +66,14 @@ class NewsApiProvider:
         results: list[NewsHeadline] = []
         for article in articles:
             title = article.get("title") or DEFAULT_HEADLINE_TITLE
+            snippet = article.get("description")
             results.append(
                 NewsHeadline(
                     title=title,
                     url=article.get("url"),
                     source=(article.get("source") or {}).get("name"),
                     published_at=article.get("publishedAt"),
+                    snippet=snippet,
                 )
             )
         return results
@@ -114,6 +118,7 @@ class TavilyProvider:
 
             # Tavily uses "published_date" (might be None for web results)
             published_at = item.get("published_date")
+            snippet = item.get("content") or item.get("snippet")
 
             results.append(
                 NewsHeadline(
@@ -121,13 +126,14 @@ class TavilyProvider:
                     url=url,
                     source=source,
                     published_at=published_at,
+                    snippet=snippet,
                 )
             )
 
         return results
 
 
-def _normalize_limit(limit: int, min_value: int = 1, max_value: int = 5) -> int:
+def _normalize_limit(limit: int, min_value: int = 1, max_value: int = 8) -> int:
     return max(min_value, min(int(limit), max_value))
 
 

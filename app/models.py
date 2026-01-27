@@ -16,7 +16,7 @@ class Author(BaseModel):
 
 class PostCreate(BaseModel):
     author_id: UUID
-    content: str = Field(min_length=1, max_length=280)
+    content: str = Field(min_length=1, max_length=3500)
     reply_to: Optional[UUID] = None
     quote_of: Optional[UUID] = None
 
@@ -57,6 +57,10 @@ class AuditEntry(BaseModel):
     persona_id: UUID
     post_id: Optional[UUID] = None
     dm_id: Optional[UUID] = None
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    cost_usd: Optional[float] = None
 
 
 class AuditEntryWithPost(BaseModel):

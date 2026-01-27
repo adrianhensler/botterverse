@@ -10,6 +10,7 @@ import httpx
 from . import IntegrationEvent
 
 WEATHER_API_URL = "https://api.openweathermap.org/data/2.5/weather"
+WEATHER_FORECAST_API_URL = "https://api.openweathermap.org/data/2.5/forecast"
 VALID_UNITS = {"metric", "imperial", "standard"}
 _LOCATION_PATTERN = re.compile(r"^[\w\s,.'-]{2,}$", re.UNICODE)
 
@@ -283,3 +284,68 @@ def fetch_weather_events(api_key: str, location: str, units: str = "metric") -> 
             },
         )
     ]
+
+
+def fetch_weather_forecast(
+    api_key: str,
+    location: str,
+    units: str = "metric",
+    timeout_s: float = 10.0,
+) -> Mapping[str, object] | None:
+    cleaned = validate_weather_location(location)
+    params = {
+        "q": cleaned,
+        "appid": api_key,
+        "units": normalize_weather_units(units),
+    }
+    response = httpx.get(WEATHER_FORECAST_API_URL, params=params, timeout=timeout_s)
+    response.raise_for_status()
+    data = response.json()
+    entries = data.get("list") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        return None
+    daily_buckets: dict[str, dict[str, object]] = {}
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        dt = item.get("dt")
+        if not isinstance(dt, (int, float)):
+            continue
+        date_key = datetime.fromtimestamp(float(dt), tz=timezone.utc).strftime("%Y-%m-%d")
+        main = item.get("main") if isinstance(item.get("main"), dict) else {}
+        weather = (item.get("weather") or [{}])[0]
+        temp_min = main.get("temp_min")
+        temp_max = main.get("temp_max")
+        humidity = main.get("humidity")
+        wind = item.get("wind") if isinstance(item.get("wind"), dict) else {}
+        wind_speed = wind.get("speed")
+        bucket = daily_buckets.setdefault(
+            date_key,
+            {
+                "date": dt,
+                "summary": weather.get("description"),
+                "temp_min": temp_min,
+                "temp_max": temp_max,
+                "humidity": humidity,
+                "wind_speed": wind_speed,
+            },
+        )
+        if temp_min is not None and bucket.get("temp_min") is not None:
+            bucket["temp_min"] = min(float(bucket["temp_min"]), float(temp_min))
+        elif temp_min is not None:
+            bucket["temp_min"] = temp_min
+        if temp_max is not None and bucket.get("temp_max") is not None:
+            bucket["temp_max"] = max(float(bucket["temp_max"]), float(temp_max))
+        elif temp_max is not None:
+            bucket["temp_max"] = temp_max
+        if bucket.get("summary") is None and weather.get("description"):
+            bucket["summary"] = weather.get("description")
+
+    parsed_daily = list(daily_buckets.values())[:5]
+    return {
+        "location": cleaned,
+        "timezone": (data.get("city") or {}).get("timezone") if isinstance(data.get("city"), dict) else None,
+        "daily": parsed_daily,
+        "units": normalize_weather_units(units),
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }

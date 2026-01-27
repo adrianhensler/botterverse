@@ -58,7 +58,11 @@ class SQLiteStore:
                 timestamp TEXT NOT NULL,
                 persona_id TEXT NOT NULL,
                 post_id TEXT,
-                dm_id TEXT
+                dm_id TEXT,
+                prompt_tokens INTEGER,
+                completion_tokens INTEGER,
+                total_tokens INTEGER,
+                cost_usd REAL
             );
             CREATE TABLE IF NOT EXISTS memories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,6 +86,14 @@ class SQLiteStore:
             migrations.append("ALTER TABLE audit_entries ADD COLUMN post_id TEXT")
         if "dm_id" not in existing:
             migrations.append("ALTER TABLE audit_entries ADD COLUMN dm_id TEXT")
+        if "prompt_tokens" not in existing:
+            migrations.append("ALTER TABLE audit_entries ADD COLUMN prompt_tokens INTEGER")
+        if "completion_tokens" not in existing:
+            migrations.append("ALTER TABLE audit_entries ADD COLUMN completion_tokens INTEGER")
+        if "total_tokens" not in existing:
+            migrations.append("ALTER TABLE audit_entries ADD COLUMN total_tokens INTEGER")
+        if "cost_usd" not in existing:
+            migrations.append("ALTER TABLE audit_entries ADD COLUMN cost_usd REAL")
         for statement in migrations:
             self.connection.execute(statement)
         if migrations:
@@ -514,8 +526,11 @@ class SQLiteStore:
     def add_audit_entry(self, entry: AuditEntry) -> None:
         self.connection.execute(
             """
-            INSERT INTO audit_entries (prompt, model_name, output, timestamp, persona_id, post_id, dm_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO audit_entries (
+                prompt, model_name, output, timestamp, persona_id, post_id, dm_id,
+                prompt_tokens, completion_tokens, total_tokens, cost_usd
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 entry.prompt,
@@ -525,6 +540,10 @@ class SQLiteStore:
                 str(entry.persona_id),
                 str(entry.post_id) if entry.post_id else None,
                 str(entry.dm_id) if entry.dm_id else None,
+                entry.prompt_tokens,
+                entry.completion_tokens,
+                entry.total_tokens,
+                entry.cost_usd,
             ),
         )
         self.connection.commit()
@@ -532,7 +551,8 @@ class SQLiteStore:
     def list_audit_entries(self, limit: int = 200) -> List[AuditEntry]:
         cursor = self.connection.execute(
             """
-            SELECT prompt, model_name, output, timestamp, persona_id, post_id, dm_id
+            SELECT prompt, model_name, output, timestamp, persona_id, post_id, dm_id,
+                   prompt_tokens, completion_tokens, total_tokens, cost_usd
             FROM audit_entries
             ORDER BY timestamp DESC
             LIMIT ?
@@ -549,6 +569,10 @@ class SQLiteStore:
                 persona_id=UUID(row["persona_id"]),
                 post_id=UUID(row["post_id"]) if row["post_id"] else None,
                 dm_id=UUID(row["dm_id"]) if row["dm_id"] else None,
+                prompt_tokens=row["prompt_tokens"],
+                completion_tokens=row["completion_tokens"],
+                total_tokens=row["total_tokens"],
+                cost_usd=row["cost_usd"],
             )
             for row in rows
         ]
@@ -803,7 +827,8 @@ class SQLiteStore:
         ]
         audit_cursor = self.connection.execute(
             """
-            SELECT prompt, model_name, output, timestamp, persona_id, post_id, dm_id
+            SELECT prompt, model_name, output, timestamp, persona_id, post_id, dm_id,
+                   prompt_tokens, completion_tokens, total_tokens, cost_usd
             FROM audit_entries
             ORDER BY timestamp ASC, id ASC
             """
@@ -817,6 +842,10 @@ class SQLiteStore:
                 "persona_id": row["persona_id"],
                 "post_id": row["post_id"],
                 "dm_id": row["dm_id"],
+                "prompt_tokens": row["prompt_tokens"],
+                "completion_tokens": row["completion_tokens"],
+                "total_tokens": row["total_tokens"],
+                "cost_usd": row["cost_usd"],
             }
             for row in audit_cursor.fetchall()
         ]
@@ -928,8 +957,11 @@ class SQLiteStore:
         for entry in payload.get("audit_entries", []):
             cursor.execute(
                 """
-                INSERT INTO audit_entries (prompt, model_name, output, timestamp, persona_id, post_id, dm_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO audit_entries (
+                    prompt, model_name, output, timestamp, persona_id, post_id, dm_id,
+                    prompt_tokens, completion_tokens, total_tokens, cost_usd
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     entry["prompt"],
@@ -939,6 +971,10 @@ class SQLiteStore:
                     entry["persona_id"],
                     entry.get("post_id"),
                     entry.get("dm_id"),
+                    entry.get("prompt_tokens"),
+                    entry.get("completion_tokens"),
+                    entry.get("total_tokens"),
+                    entry.get("cost_usd"),
                 ),
             )
         for entry in payload.get("memories", []):

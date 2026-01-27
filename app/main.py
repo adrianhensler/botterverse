@@ -5,6 +5,7 @@ import ipaddress
 import logging
 import os
 import random
+import re
 from collections import defaultdict
 from collections import deque
 from datetime import datetime, timedelta, timezone
@@ -24,8 +25,9 @@ from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 
 from . import bot_director as director_state
-from .bot_director import BotDirector, Persona, new_event, seed_personas
+from .bot_director import BotDirector, Persona, PlannedPost, new_event, seed_personas
 from .integrations import IntegrationEvent
+from .integrations.github import fetch_github_events
 from .integrations.news import fetch_news_events
 from .integrations.sports import fetch_sports_events
 from .integrations.weather import fetch_weather_events
@@ -70,16 +72,16 @@ templates = Jinja2Templates(directory="app/templates")
 
 personas = [
     Persona(
-        id=uuid5(BOTTERVERSE_NAMESPACE, "newswire"),
-        handle="newswire",
-        display_name="Newswire",
+        id=uuid5(BOTTERVERSE_NAMESPACE, "newsbot"),
+        handle="newsbot",
+        display_name="News Bot",
         tone="urgent",
-        interests=["breaking", "policy"],
+        interests=["news", "headlines", "breaking", "policy"],
         cadence_minutes=15,
     ),
     Persona(
-        id=uuid5(BOTTERVERSE_NAMESPACE, "weatherguy"),
-        handle="weatherguy",
+        id=uuid5(BOTTERVERSE_NAMESPACE, "weatherbot"),
+        handle="weatherbot",
         display_name="Weather Bot",
         tone="cheerful",
         interests=["weather", "alerts"],
@@ -124,6 +126,14 @@ personas = [
         tone="curious",
         interests=["ai", "gadgets", "startups"],
         cadence_minutes=35,
+    ),
+    Persona(
+        id=uuid5(BOTTERVERSE_NAMESPACE, "githubbot"),
+        handle="githubbot",
+        display_name="GitHub Bot",
+        tone="constructive",
+        interests=["github", "open source", "code review", "release notes"],
+        cadence_minutes=720,
     ),
     Persona(
         id=uuid5(BOTTERVERSE_NAMESPACE, "culturepulse"),
@@ -308,6 +318,7 @@ last_like_at: Dict[UUID, datetime] = {}
 liked_posts_by_persona: Dict[UUID, Set[UUID]] = defaultdict(set)
 recent_external_ids: deque[str] = deque(maxlen=500)
 recent_external_ids_set: Set[str] = set()
+last_github_ingest_at: datetime | None = None
 
 LIKE_COOLDOWN = timedelta(minutes=10)
 LIKE_PROBABILITY = 0.15
@@ -321,8 +332,11 @@ EVENT_POLL_MINUTES = int(os.getenv("BOTTERVERSE_EVENT_POLL_MINUTES", "5"))
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
 NEWS_COUNTRY = os.getenv("NEWS_COUNTRY", "us")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
-WEATHER_LOCATION = os.getenv("WEATHER_LOCATION", "New York,US")
+WEATHER_LOCATION = os.getenv("WEATHER_LOCATION", "Halifax,NS,CA")
 WEATHER_UNITS = os.getenv("WEATHER_UNITS", "metric")
+GITHUB_USERNAME = os.getenv("GITHUB_USERNAME", "")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+GITHUB_MIN_INTERVAL_HOURS = int(os.getenv("GITHUB_MIN_INTERVAL_HOURS", "12"))
 SPORTSDB_API_KEY = os.getenv("SPORTSDB_API_KEY", "")
 SPORTS_LEAGUE_ID = os.getenv("SPORTS_LEAGUE_ID", "4328")
 
@@ -343,6 +357,20 @@ def run_director_tick() -> dict:
     now = datetime.now(timezone.utc)
     recent_posts = store.list_posts(limit=50)
     planned = bot_director.next_posts(now, recent_posts, store, llm_client)
+    created = _create_planned_posts(planned)
+    return {"created": created, "paused": False}
+
+
+def _mentioned_personas(content: str) -> list[Persona]:
+    handles = {persona.handle: persona for persona in personas}
+    mentions = set(
+        match.group(1).lower()
+        for match in re.finditer(r"@([A-Za-z0-9_]+)", content)
+    )
+    return [handles[handle] for handle in mentions if handle in handles]
+
+
+def _create_planned_posts(planned: List[PlannedPost]) -> List[Post]:
     created: List[Post] = []
     for planned_post in planned:
         created_post = store.create_post(planned_post.payload)
@@ -358,9 +386,61 @@ def run_director_tick() -> dict:
                     timestamp=planned_post.audit_entry.timestamp,
                     persona_id=planned_post.audit_entry.persona_id,
                     post_id=created_post.id,
+                    prompt_tokens=planned_post.audit_entry.prompt_tokens,
+                    completion_tokens=planned_post.audit_entry.completion_tokens,
+                    total_tokens=planned_post.audit_entry.total_tokens,
+                    cost_usd=planned_post.audit_entry.cost_usd,
                 )
             )
-    return {"created": created, "paused": False}
+    return created
+
+
+def _maybe_reply_to_mentions(post: Post) -> List[Post]:
+    author = store.get_author(post.author_id)
+    if not author or author.type != "human":
+        return []
+    mentioned = _mentioned_personas(post.content)
+    if not mentioned:
+        return []
+    recent_posts = store.list_posts(limit=50)
+    planned = bot_director.plan_direct_mentions(
+        mentioned,
+        target_post=post,
+        recent_posts=recent_posts,
+        store=store,
+        llm_client=llm_client,
+    )
+    if not planned:
+        return []
+    return _create_planned_posts(planned)
+
+
+def _maybe_reply_to_bot_reply(post: Post) -> List[Post]:
+    author = store.get_author(post.author_id)
+    if not author or author.type != "human":
+        return []
+    if not post.reply_to:
+        return []
+    parent = store.get_post(post.reply_to)
+    if not parent:
+        return []
+    parent_author = store.get_author(parent.author_id)
+    if not parent_author or parent_author.type != "bot":
+        return []
+    persona = persona_lookup.get(parent_author.id)
+    if not persona:
+        return []
+    recent_posts = store.list_posts(limit=50)
+    planned = bot_director.plan_direct_reply_to_bot(
+        persona,
+        target_post=post,
+        recent_posts=recent_posts,
+        store=store,
+        llm_client=llm_client,
+    )
+    if not planned:
+        return []
+    return _create_planned_posts([planned])
 
 
 def _dm_thread_key(user_a: UUID, user_b: UUID) -> tuple[UUID, UUID]:
@@ -426,6 +506,10 @@ def _maybe_summarize_dm_thread(
                 persona_id=persona.id,
                 post_id=None,
                 dm_id=None,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+                total_tokens=result.total_tokens,
+                cost_usd=result.cost_usd,
             )
         )
         last_dm_summary_ids[thread_key] = full_thread[-1].id
@@ -498,6 +582,10 @@ def run_dm_reply_tick() -> dict:
                     timestamp=datetime.now(timezone.utc),
                     persona_id=persona.id,
                     dm_id=created_message.id,
+                    prompt_tokens=result.prompt_tokens,
+                    completion_tokens=result.completion_tokens,
+                    total_tokens=result.total_tokens,
+                    cost_usd=result.cost_usd,
                 )
             )
             last_processed_dm_per_thread[thread_key] = latest_message.id
@@ -571,14 +659,22 @@ def _track_external_id(external_id: str) -> bool:
 
 
 def run_event_ingest_tick() -> dict:
+    global last_github_ingest_at
     ingested: List[dict] = []
     events: List[IntegrationEvent] = []
+    now = datetime.now(timezone.utc)
     if NEWS_API_KEY:
         events.extend(fetch_news_events(NEWS_API_KEY, country=NEWS_COUNTRY))
     if OPENWEATHER_API_KEY and WEATHER_LOCATION:
         events.extend(fetch_weather_events(OPENWEATHER_API_KEY, WEATHER_LOCATION, units=WEATHER_UNITS))
     if SPORTSDB_API_KEY and SPORTS_LEAGUE_ID:
         events.extend(fetch_sports_events(SPORTSDB_API_KEY, SPORTS_LEAGUE_ID))
+    if GITHUB_USERNAME:
+        if last_github_ingest_at is None or now - last_github_ingest_at >= timedelta(
+            hours=GITHUB_MIN_INTERVAL_HOURS
+        ):
+            events.extend(fetch_github_events(GITHUB_USERNAME, token=GITHUB_TOKEN))
+            last_github_ingest_at = now
     for event in events:
         if not _track_external_id(event.external_id):
             continue
@@ -712,11 +808,65 @@ async def list_authors() -> List[Author]:
     return store.list_authors()
 
 
+def _spend_summary(limit: int = 5000) -> dict:
+    entries = store.list_audit_entries(limit=limit)
+    totals = {
+        "cost_usd": 0.0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "entries": len(entries),
+    }
+    by_persona: Dict[UUID, dict] = {}
+    for entry in entries:
+        if entry.cost_usd:
+            totals["cost_usd"] += entry.cost_usd
+        if entry.prompt_tokens:
+            totals["prompt_tokens"] += entry.prompt_tokens
+        if entry.completion_tokens:
+            totals["completion_tokens"] += entry.completion_tokens
+        if entry.total_tokens:
+            totals["total_tokens"] += entry.total_tokens
+        persona_stats = by_persona.setdefault(
+            entry.persona_id,
+            {
+                "persona_id": entry.persona_id,
+                "cost_usd": 0.0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "entries": 0,
+            },
+        )
+        persona_stats["entries"] += 1
+        if entry.cost_usd:
+            persona_stats["cost_usd"] += entry.cost_usd
+        if entry.prompt_tokens:
+            persona_stats["prompt_tokens"] += entry.prompt_tokens
+        if entry.completion_tokens:
+            persona_stats["completion_tokens"] += entry.completion_tokens
+        if entry.total_tokens:
+            persona_stats["total_tokens"] += entry.total_tokens
+
+    persona_rows = []
+    for persona_id, stats in by_persona.items():
+        author = store.get_author(persona_id)
+        stats["handle"] = author.handle if author else str(persona_id)
+        stats["display_name"] = author.display_name if author else str(persona_id)
+        persona_rows.append(stats)
+    persona_rows.sort(key=lambda row: (row["cost_usd"], row["total_tokens"]), reverse=True)
+
+    return {"totals": totals, "by_persona": persona_rows}
+
+
 @app.post("/posts", response_model=Post)
 async def create_post(payload: PostCreate) -> Post:
     if store.get_author(payload.author_id) is None:
         raise HTTPException(status_code=404, detail="author not found")
-    return store.create_post(payload)
+    post = store.create_post(payload)
+    _maybe_reply_to_mentions(post)
+    _maybe_reply_to_bot_reply(post)
+    return post
 
 
 @app.get("/timeline", response_model=List[TimelineEntry])
@@ -734,6 +884,24 @@ async def timeline(limit: int = 50, ranked: bool = False) -> List[TimelineEntry]
     return entries
 
 
+@app.get("/spend")
+async def spend_summary(limit: int = 5000) -> dict:
+    return _spend_summary(limit=limit)
+
+
+@app.get("/spend.html", response_class=HTMLResponse)
+async def spend_dashboard(request: Request, limit: int = 5000):
+    summary = _spend_summary(limit=limit)
+    return templates.TemplateResponse(
+        "spend.html",
+        {
+            "request": request,
+            "totals": summary["totals"],
+            "rows": summary["by_persona"],
+        },
+    )
+
+
 @app.post("/posts/{post_id}/reply", response_model=Post)
 async def reply(post_id: UUID, payload: PostCreate) -> Post:
     if store.get_author(payload.author_id) is None:
@@ -746,7 +914,10 @@ async def reply(post_id: UUID, payload: PostCreate) -> Post:
         reply_to=post_id,
         quote_of=payload.quote_of,
     )
-    return store.create_post(reply_payload)
+    post = store.create_post(reply_payload)
+    _maybe_reply_to_mentions(post)
+    _maybe_reply_to_bot_reply(post)
+    return post
 
 
 @app.post("/posts/{post_id}/like")
@@ -968,6 +1139,8 @@ async def create_post_html(request: Request):
         return _htmx_error("Quote target post not found", status_code=404)
 
     post = store.create_post(payload)
+    _maybe_reply_to_mentions(post)
+    _maybe_reply_to_bot_reply(post)
     author = store.get_author(post.author_id)
     human_author = store.get_author(author_id)
 
