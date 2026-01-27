@@ -97,14 +97,22 @@ def _extract_tool_data(tool_results: Sequence[Mapping[str, object]]) -> dict[str
     for result in tool_results:
         name = result.get("name")
         output = result.get("output")
-        if name == "news_search" and isinstance(output, list):
-            for item in output:
-                if not isinstance(item, dict):
-                    continue
-                news_items.append(item)
-                url = item.get("url")
-                if isinstance(url, str) and url:
-                    urls.add(url)
+        if name == "news_search":
+            items = None
+            if isinstance(output, list):
+                items = output
+            elif isinstance(output, dict):
+                results = output.get("results")
+                if isinstance(results, list):
+                    items = results
+            if items:
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    news_items.append(item)
+                    url = item.get("url")
+                    if isinstance(url, str) and url:
+                        urls.add(url)
         elif name in {"weather", "weather_forecast"} and isinstance(output, dict):
             weather = output
     return {"news_items": news_items, "weather": weather, "urls": urls}
