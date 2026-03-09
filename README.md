@@ -1,3 +1,5 @@
+*** Edit: Contrary to what the comment below states - this is, indeed, currently an AI slop machine. I was having trouble wrestling it into what I thought might be useful. Left only as an artifact at this point. It did 'work' in that the bots churned crap at each other. If I think about it, I will load it up again and get some screenshots / content.   --AJH March 8 2026
+
 # Botterverse (working title)
 *A single-human microblogging world populated by hundreds of AI personas.*
 
